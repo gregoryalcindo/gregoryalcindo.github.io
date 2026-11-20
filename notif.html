@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1B1230">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Test des notifications</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body { overflow: auto; }
+  main { max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px;
+    padding: calc(24px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 40px max(16px, env(safe-area-inset-left, 0px)); }
+  #journal { white-space: pre-wrap; font-size: 11px; color: var(--brume); margin: 0; }
+  .etat-ok { border-color: var(--menthe); }
+  .etat-ko { border-color: var(--corail); }
+</style>
+</head>
+<body>
+<main>
+  <div class="logo-geant" style="font-size:34px">BAD<br>HABITS<span>CAN DIE</span></div>
+  <h2 class="partie-nom" style="font-size:20px">Test des notifications</h2>
+  <div class="carte" id="etat">Chargement…</div>
+  <div class="carte pile" id="ios" hidden>
+    <b>Sur iPhone, une étape avant :</b>
+    <span>1. Touche le bouton Partager de Safari (le carré avec une flèche).</span>
+    <span>2. Choisis « Sur l'écran d'accueil ».</span>
+    <span>3. Ouvre l'appli depuis sa nouvelle icône, puis reviens ici.</span>
+  </div>
+  <button class="btn corail large" id="activer">1. Activer les notifications</button>
+  <button class="btn soleil large" id="maintenant" disabled>2. M'envoyer une notification</button>
+  <button class="btn fantome large" id="differe" disabled>3. Dans 1 minute (ferme l'appli)</button>
+  <pre id="journal"></pre>
+</main>
+<script src="config.js"></script>
+<script src="notif.js"></script>
+</body>
+</html>

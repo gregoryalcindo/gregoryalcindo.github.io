@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#1B1230">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Bad Habits Can Die</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="entete" hidden>
+    <div class="logo-mini">BHCD</div>
+    <div class="entete-infos">
+      <span class="puce puce-jour" id="puce-jour">J+0</span>
+      <span class="puce puce-points" id="puce-points">100 pts</span>
+    </div>
+  </header>
+  <main id="vue"></main>
+  <nav id="nav" hidden>
+    <button class="onglet" data-onglet="fil"><span class="ico">◉</span><span>Fil</span></button>
+    <button class="onglet" data-onglet="partie"><span class="ico">⚑</span><span>Partie</span></button>
+    <button class="onglet-craque" id="btn-craque" aria-label="J'ai craqué"><span>J'AI<br>CRAQUÉ</span></button>
+    <button class="onglet" data-onglet="badges"><span class="ico">✦</span><span>Badges</span></button>
+    <button class="onglet" data-onglet="moi"><span class="ico">☺</span><span>Moi</span></button>
+  </nav>
+</div>
+<div id="calques"></div>
+<div id="bannieres"></div>
+<canvas id="confettis"></canvas>
+<script src="app.js"></script>
+</body>
+</html>
