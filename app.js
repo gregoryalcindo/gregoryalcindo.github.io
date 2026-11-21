@@ -1186,13 +1186,44 @@ function brancherDepot(el, id, quandPret) {
     const m = await preparerFichier(f);
     input.value = '';
     if (m.erreur) { banniere('Fichier refusé', m.erreur); return; }
-    const ap = $('#' + id + '-apercu', el);
-    ap.hidden = false;
-    ap.innerHTML = m.video
-      ? `<video src="${m.url}" controls playsinline autoplay muted loop></video>`
-      : `<img src="${m.url}" alt="Aperçu">`;
-    quandPret(m);
+    montrerApercu(el, id, m, quandPret);
   }));
+}
+
+function montrerApercu(el, id, m, quandPret) {
+  const ap = $('#' + id + '-apercu', el);
+  ap.hidden = false;
+  ap.innerHTML = m.video
+    ? `<video src="${m.url}" controls playsinline autoplay muted loop></video>`
+    : `<img src="${m.url}" alt="Aperçu"><button type="button" class="retourner">↔ Retourner</button>`;
+  const b = ap.querySelector('.retourner');
+  if (b) b.addEventListener('click', async () => {
+    b.disabled = true;
+    const r = await retournerPhoto(m);
+    if (r) montrerApercu(el, id, r, quandPret); else b.disabled = false;
+  });
+  quandPret(m);
+}
+
+/** Remet une photo à l'endroit (effet miroir de la caméra selfie). */
+function retournerPhoto(m) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const g = c.getContext('2d');
+      g.translate(c.width, 0); g.scale(-1, 1);
+      g.drawImage(img, 0, 0);
+      c.toBlob(b => {
+        if (!b) { resolve(null); return; }
+        URL.revokeObjectURL(m.url);
+        resolve({ blob: b, type: 'image/jpeg', url: URL.createObjectURL(b), video: false });
+      }, 'image/jpeg', 0.9);
+    };
+    img.onerror = () => resolve(null);
+    img.src = m.url;
+  });
 }
 
 /** Chiffre puis envoie le média avec l'action. */
