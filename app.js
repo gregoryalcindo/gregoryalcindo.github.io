@@ -11,7 +11,7 @@ const J = 86400000, H = 3600000;
 const PV_DEPART = 300, PV_RECHUTE = 10, DUREE = 365, MAX_DEFIS = 3;
 const MAX_VIDEO = 20 * 1024 * 1024, MAX_DUREE_VIDEO = 16;
 const CLE = 'bhcd-v2';
-const VERSION_APPLI = '8';
+const VERSION_APPLI = '9';
 
 const HABITUDES = {
   clope:     { nom: 'Fumer',           e: '🚬', bete: 'La Clope',     c: '#A8988A' },
@@ -1217,15 +1217,28 @@ function dezoomer(fl) {
 async function camera(mode, face) {
   const video = mode === 'video';
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || (video && !window.MediaRecorder)) return 'secours';
+  /* f : 'user', 'environment' ou { deviceId } d'une caméra précise. On veut le champ entier du capteur (4:3), sans rognage. */
   const demander = async f => {
-    try {
-      const fl = await navigator.mediaDevices.getUserMedia({ video: { facingMode: f, width: { ideal: 1280 }, height: { ideal: 960 }, aspectRatio: { ideal: 4 / 3 }, frameRate: { ideal: 30 } }, audio: video });
-      dezoomer(fl);
-      return fl;
-    } catch (err) {
-      if (video && err && err.name !== 'NotAllowedError') return navigator.mediaDevices.getUserMedia({ video: { facingMode: f }, audio: false });
-      throw err;
+    const cible = typeof f === 'string' ? { facingMode: f } : { deviceId: { exact: f.deviceId } };
+    const essais = [
+      Object.assign({ aspectRatio: { exact: 4 / 3 }, width: { ideal: 1280 }, frameRate: { ideal: 30 }, resizeMode: 'none' }, cible),
+      Object.assign({ aspectRatio: { exact: 4 / 3 }, width: { ideal: 1280 }, frameRate: { ideal: 30 } }, cible),
+      Object.assign({ width: { ideal: 1280 }, height: { ideal: 960 }, frameRate: { ideal: 30 } }, cible),
+      cible
+    ];
+    let derniere;
+    for (const v of essais) {
+      try {
+        const fl = await navigator.mediaDevices.getUserMedia({ video: v, audio: video });
+        dezoomer(fl);
+        return fl;
+      } catch (err) {
+        derniere = err;
+        if (err && err.name === 'NotAllowedError') throw err;
+      }
     }
+    if (video) return navigator.mediaDevices.getUserMedia({ video: cible, audio: false });
+    throw derniere;
   };
   let flux;
   try { flux = await demander(face); }
@@ -1240,6 +1253,7 @@ async function camera(mode, face) {
     el.innerHTML = `<video class="cam-vue" autoplay playsinline muted></video>
       <div class="cam-haut">
         <button type="button" class="cam-btn" data-c="fermer" aria-label="Fermer">✕</button>
+        <span class="cam-info"></span>
         <span class="cam-chrono" hidden>0:15</span>
         <button type="button" class="cam-btn" data-c="tourner" aria-label="Changer de caméra">⟲</button>
       </div>
@@ -1253,7 +1267,16 @@ async function camera(mode, face) {
     const chrono = $('.cam-chrono', el);
     let enreg = null, morceaux = [], minuteur = null, debut = 0, termine = false, dessin = 0;
 
-    const brancher = f => { flux = f; vue.srcObject = f; vue.classList.toggle('miroir', face === 'user'); };
+    const info = $('.cam-info', el);
+    const brancher = f => {
+      flux = f; vue.srcObject = f;
+      const t = f.getVideoTracks()[0];
+      const st = t && t.getSettings ? t.getSettings() : {};
+      if (st.facingMode) face = st.facingMode === 'user' ? 'user' : 'environment';
+      else if (t && /front|avant|user/i.test(t.label)) face = 'user';
+      vue.classList.toggle('miroir', face === 'user');
+      vue.onloadedmetadata = () => { info.textContent = vue.videoWidth + '×' + vue.videoHeight; };
+    };
     brancher(flux);
     const arreterFlux = () => { if (flux) flux.getTracks().forEach(t => t.stop()); };
     const finir = r => {
@@ -1316,7 +1339,7 @@ async function camera(mode, face) {
       el.classList.add('filme');
       $('[data-c=tourner]', el).style.visibility = 'hidden';
       $('.cam-aide', el).textContent = 'Touche pour arrêter';
-      chrono.hidden = false;
+      chrono.hidden = false; info.hidden = true;
       son('tic'); vibrer('30');
       const max = (MAX_DUREE_VIDEO - 1) * 1000;
       minuteur = setInterval(() => {
@@ -1332,10 +1355,20 @@ async function camera(mode, face) {
       if (b.dataset.c === 'fermer') { if (enreg) { enreg.onstop = null; arreterVideo(); } finir(null); }
       else if (b.dataset.c === 'declencher') { if (video) filmer(); else photo(); }
       else if (b.dataset.c === 'tourner') {
+        /* Passe à la caméra suivante : certains téléphones ont plusieurs caméras avant ou arrière (grand angle). */
+        const actuelle = (flux.getVideoTracks()[0] || {}).getSettings ? flux.getVideoTracks()[0].getSettings().deviceId : '';
+        let cams = [];
+        try { cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput' && d.deviceId); } catch (e) { /* rien */ }
         arreterFlux();
-        face = face === 'user' ? 'environment' : 'user';
-        try { brancher(await demander(face)); }
-        catch (err) { finir('secours'); }
+        try {
+          if (cams.length > 1) {
+            const i = cams.findIndex(d => d.deviceId === actuelle);
+            brancher(await demander({ deviceId: cams[(i + 1) % cams.length].deviceId }));
+          } else {
+            face = face === 'user' ? 'environment' : 'user';
+            brancher(await demander(face));
+          }
+        } catch (err) { finir('secours'); }
       }
     });
   });
