@@ -21,6 +21,10 @@ self.addEventListener('push', e => {
         notifs = d.notifs || [];
       }
     } catch (err) { /* réseau absent : notification générique */ }
+    try {
+      const fenetres = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      fenetres.forEach(c => c.postMessage({ type: 'maj' }));
+    } catch (err) { /* rien */ }
     if (!notifs.length) notifs = [{ titre: 'Bad Habits Can Die', corps: 'Il se passe quelque chose dans ta partie.' }];
     for (const n of notifs) {
       await self.registration.showNotification(n.titre, {

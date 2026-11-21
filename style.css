@@ -390,3 +390,12 @@ h1, h2, h3 { margin: 0; text-wrap: balance; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* ===== Jeu à plusieurs ===== */
+.sablier { width: 64px; height: 64px; border-radius: 50%; border: 6px solid var(--encre-3); border-top-color: var(--soleil); animation: tourne .9s linear infinite; }
+@keyframes tourne { to { transform: rotate(360deg); } }
+.partie-ligne { display: flex; justify-content: space-between; align-items: center; width: 100%; text-align: left; gap: 10px; }
+.partie-ligne.actuelle { border-color: var(--soleil); }
+.voir-media { display: flex; flex-direction: column; gap: 4px; width: 100%; color: var(--papier); font-weight: 900; }
+.evt-media.efface { background: var(--encre-3); }
+.evt-media.efface .vide { padding: 14px 10px; font-size: 13px; }

@@ -1,12 +1,16 @@
 'use strict';
-/* Bad Habits Can Die — prototype jouable (mode démo, données sur le téléphone).
-   Règle proposée : chaque mauvaise habitude est une « bête » à 300 points de vie.
-   Chaque jour tenu lui retire 1 PV, chaque rechute lui en rend 10. La partie dure 365 jours :
-   il faut l'abattre avant la fin. */
+/* Bad Habits Can Die — le jeu à plusieurs.
+   Chaque mauvaise habitude est une « bête » à 300 points de vie : chaque jour tenu lui retire 1 PV,
+   chaque rechute lui en rend 10. Il faut l'abattre avant la fin de l'année.
+   Le serveur (Apps Script) garde la partie ; les photos et vidéos sont chiffrées sur le téléphone avec
+   la clé du lien d'invitation, et effacées vite (24 h, ou dès que la preuve est jugée). */
 
+const SERVEUR = window.BHCD_SERVEUR;
+const SITE = 'https://gregoryalcindo.github.io/';
 const J = 86400000, H = 3600000;
-const PV_DEPART = 300, PV_RECHUTE = 10, DUREE = 365, MAX_DEFIS = 3, DELAI_GAGE = 12 * H;
-const CLE = 'bhcd-etat-v1';
+const PV_DEPART = 300, PV_RECHUTE = 10, DUREE = 365, MAX_DEFIS = 3;
+const MAX_VIDEO = 20 * 1024 * 1024, MAX_DUREE_VIDEO = 16;
+const CLE = 'bhcd-v2';
 
 const HABITUDES = {
   clope:     { nom: 'Fumer',           e: '🚬', bete: 'La Clope',     c: '#A8988A' },
@@ -36,25 +40,7 @@ const SUGGESTIONS = [
   'Laver la voiture de quelqu\'un de la partie'
 ];
 
-const GAGES_INVENTES = [
-  'Imiter une poule pendant 20 secondes, en vidéo',
-  'Appeler ta mère et lui chanter une chanson',
-  'Faire 100 squats',
-  'Parler en rimes pendant une heure',
-  'Envoyer un vocal d\'une minute de compliments à quelqu\'un de la partie',
-  'Faire un selfie avec un inconnu qui sourit',
-  'Manger un piment entier'
-];
-
-const BOTS = [
-  { id: 'sarah', nom: 'Sarah', couleur: '#7AB8FF', habit: 'reseaux', gages: ['Supprimer Instagram 48 h', 'Poster une story sans filtre', 'Faire 30 burpees'] },
-  { id: 'tom',   nom: 'Tom',   couleur: '#FFC93C', habit: 'sucre',   gages: ['Manger un citron entier', 'Faire 50 pompes', 'Payer les croissants à tout le monde'] },
-  { id: 'nadia', nom: 'Nadia', couleur: '#3DDC97', habit: 'ongles',  gages: ['Vernis rose fluo pendant une semaine', 'Gainage 3 minutes', 'Ranger le garage de Tom'] },
-  { id: 'max',   nom: 'Max',   couleur: '#FF9F6B', habit: 'retard',  gages: ['Arriver 30 min en avance au prochain rendez-vous', 'Payer l\'apéro', 'Courir 5 km'] }
-];
-
 const COULEURS = ['#FF5A4E', '#FFC93C', '#3DDC97', '#7AB8FF', '#C99BFF', '#FF7EC8'];
-
 const REACTIONS = [['respect', '👏'], ['honte', '🤡'], ['force', '💪'], ['mdr', '😂']];
 
 const BADGES = [
@@ -68,7 +54,7 @@ const BADGES = [
   { id: 'honnete',   nom: 'Honnête',       desc: 'Avouer une rechute toi-même',      g: '🙋', c: ['#7AB8FF', '#3DDC97'] },
   { id: 'dette',     nom: 'Dette payée',   desc: 'Gage prouvé et validé',            g: '🧾', c: ['#FFC93C', '#FF9A6B'] },
   { id: 'bourreau',  nom: 'Bourreau',      desc: 'Choisir le gage d\'un ami',        g: '🪓', c: ['#FF5A4E', '#C8352C'] },
-  { id: 'juge',      nom: 'Juge',          desc: 'Valider une preuve',               g: '⚖️', c: ['#B6A8D8', '#7AB8FF'] },
+  { id: 'juge',      nom: 'Juge',          desc: 'Juger une preuve',                 g: '⚖️', c: ['#B6A8D8', '#7AB8FF'] },
   { id: 'balance',   nom: 'Balance',       desc: 'Dénonciation confirmée',           g: '🐀', c: ['#A8988A', '#FF7EC8'] },
   { id: 'phenix',    nom: 'Phénix',        desc: '7 jours tenus après une rechute',  g: '🌅', c: ['#FF7A3D', '#FF5A4E'] },
   { id: 'flair',     nom: 'Flair',         desc: 'Gagner un pari',                   g: '🎯', c: ['#3DDC97', '#7AB8FF'] },
@@ -80,39 +66,34 @@ const BADGES = [
 
 /* ================= État ================= */
 
-function etatNeuf() {
-  return {
-    v: 1, pret: false, onglet: 'fil', decalage: 0, son: true, ids: 1,
-    onb: { etape: 0, pseudo: '', couleur: COULEURS[0], habit: null, nomAutre: '', gages: [], nomPartie: 'Les Potos', rejoints: 0 },
-    membres: {}, partie: null, defis: [], fil: [], gages: [], accusations: [], paris: [], badges: {},
-    stats: { aveux: 0, dettes: 0, bourreau: 0, juge: 0, balance: 0, paris: 0, innocent: 0, reacs: 0 }
-  };
+function localNeuf() {
+  return { v: 2, joueur: null, secret: null, pseudo: '', couleur: COULEURS[0], parties: [], courante: null,
+    son: true, onglet: 'fil', vus: {}, appareil: null, invitation: null };
 }
 
-let S = charger();
-const MEDIAS = {};            // vidéos de la session (URL locales)
-const PV_AFFICHE = {};        // derniers PV affichés, pour animer les dégâts
-let enSimulation = false;
-let notifsSim = [];
+let L = chargerLocal();     // ce qui reste sur le téléphone : identité, clés des parties, réglages
+let P = null;               // la partie affichée, telle que le serveur l'a envoyée
+let E = { mode: null, etape: 0, b: null, apercu: null }; // écrans hors partie (création, invitation…)
+const MEDIAS = {};          // médias déchiffrés de la session : id → URL locale
+const PV_AFFICHE = {};
 
-function charger() {
+function chargerLocal() {
   try {
     const t = localStorage.getItem(CLE);
-    if (t) { const e = JSON.parse(t); if (e && e.v === 1) return Object.assign(etatNeuf(), e); }
-  } catch (e) { /* stockage indisponible : on repart de zéro */ }
-  return etatNeuf();
+    if (t) { const e = JSON.parse(t); if (e && e.v === 2) return Object.assign(localNeuf(), e); }
+    localStorage.removeItem('bhcd-etat-v1'); // ancienne démo
+  } catch (e) { /* stockage indisponible */ }
+  return localNeuf();
 }
-
-function sauver() {
-  // Médias éphémères : seuls les 40 derniers événements gardent leur photo, les gages réglés la perdent.
-  S.fil.forEach((ev, i) => { if (i >= 40) ev.media = null; });
-  S.gages.forEach(g => { if (g.statut === 'valide') g.preuve = null; });
-  try { localStorage.setItem(CLE, JSON.stringify(S)); }
-  catch (e) {
-    // Trop lourd : on retire les médias des vieux événements puis on réessaie.
-    S.fil.forEach((ev, i) => { if (i > 15) ev.media = null; });
-    try { localStorage.setItem(CLE, JSON.stringify(S)); } catch (e2) { /* tant pis */ }
-  }
+function sauverLocal() {
+  try { localStorage.setItem(CLE, JSON.stringify(L)); } catch (e) { /* tant pis */ }
+}
+function memoriserPartie() {
+  if (!P) return;
+  try { localStorage.setItem('bhcd-p:' + P.id, JSON.stringify(P)); } catch (e) { /* tant pis */ }
+}
+function partieMemorisee(id) {
+  try { const t = localStorage.getItem('bhcd-p:' + id); return t ? JSON.parse(t) : null; } catch (e) { return null; }
 }
 
 /* ================= Outils ================= */
@@ -120,29 +101,34 @@ function sauver() {
 const $ = (s, r = document) => r.querySelector(s);
 const attendre = ms => new Promise(r => setTimeout(r, ms));
 const hasard = a => a[Math.floor(Math.random() * a.length)];
-const uid = () => 'x' + (S.ids++);
-const maintenant = () => Date.now() + S.decalage;
+const maintenant = () => Date.now();
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]));
-const nom = id => (S.membres[id] ? S.membres[id].nom : '?');
-const moi = () => S.membres.moi;
-const defi = id => S.defis.find(d => d.id === id);
-const mesDefis = () => S.defis.filter(d => d.qui === 'moi');
+const nom = id => (P && P.membres[id] ? P.membres[id].nom : '?');
+const defi = id => P.defis.find(d => d.id === id);
+const mesDefis = () => P.defis.filter(d => d.qui === L.joueur);
+const moiMembre = () => P.membres[L.joueur];
+const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+const autonome = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
-function jours(d) { return Math.max(0, Math.min(DUREE, Math.floor((maintenant() - d.debut) / J))); }
-function pv(d) {
-  if (d.mort) return 0;
-  return Math.max(0, PV_DEPART - jours(d) + PV_RECHUTE * d.rechutes.length);
-}
+function jours(d) { return d.debut ? Math.max(0, Math.min(DUREE, Math.floor((maintenant() - d.debut) / J))) : 0; }
+function pv(d) { return d.mort ? 0 : Math.max(0, PV_DEPART - jours(d) + PV_RECHUTE * d.rechutes.length); }
 function serie(d) {
+  if (!d.debut) return 0;
   const der = d.rechutes.length ? Math.max(d.debut, d.rechutes[d.rechutes.length - 1]) : d.debut;
-  const fin = d.mort || maintenant();
-  return Math.max(0, Math.floor((fin - der) / J));
+  return Math.max(0, Math.floor(((d.mort || maintenant()) - der) / J));
 }
-function marge(d) {
-  const restants = DUREE - jours(d);
-  return Math.max(0, Math.floor((restants - pv(d)) / PV_RECHUTE));
-}
+function marge(d) { return Math.max(0, Math.floor((DUREE - jours(d) - pv(d)) / PV_RECHUTE)); }
 function enJeu(d) { return !d.mort && !d.survit; }
+
+/** Même calcul que le serveur. */
+function points(id) {
+  const m = P.membres[id];
+  if (!m) return 0;
+  let p = 100 + 10 * Object.keys(m.badges).length + 20 * m.stats.dettes;
+  p += 100 * P.defis.filter(d => d.qui === id && d.mort).length;
+  for (const x of P.paris) if (x.qui === id) p += x.statut === 'gagne' ? x.mise : -x.mise;
+  return Math.max(0, p);
+}
 
 function relatif(t) {
   const d = maintenant() - t;
@@ -152,6 +138,13 @@ function relatif(t) {
   const n = Math.floor(d / J);
   return 'il y a ' + n + (n > 1 ? ' jours' : ' jour');
 }
+function relatifFutur(t) {
+  const d = t - maintenant();
+  if (d <= 0) return 'maintenant';
+  if (d < J) return 'dans ' + Math.ceil(d / H) + ' h';
+  const n = Math.ceil(d / J);
+  return 'dans ' + n + (n > 1 ? ' jours' : ' jour');
+}
 function resteTemps(ech) {
   const r = Math.max(0, ech - maintenant());
   const h = Math.floor(r / H), m = Math.floor((r % H) / 60000);
@@ -159,15 +152,79 @@ function resteTemps(ech) {
 }
 
 function avatar(id, classe = '', attrs = '') {
-  const m = S.membres[id] || { nom: '?', couleur: '#888' };
-  return `<div class="avatar ${classe}" style="background:${m.couleur}" ${attrs}>${esc(m.nom.charAt(0).toUpperCase())}</div>`;
+  const m = (P && P.membres[id]) || { nom: '?', couleur: '#888' };
+  return `<div class="avatar ${classe}" style="background:${esc(m.couleur)}" ${attrs}>${esc(m.nom.charAt(0).toUpperCase())}</div>`;
 }
 
-/* ================= Son, vibration, notifications ================= */
+/* ================= Serveur ================= */
+
+async function appel(a, params = {}) {
+  if (!SERVEUR) throw new Error('Serveur non branché');
+  const corps = Object.assign({ a, joueur: L.joueur, secret: L.secret }, params);
+  if (P && !corps.partie) corps.partie = P.id;
+  let r;
+  try { r = await fetch(SERVEUR, { method: 'POST', body: JSON.stringify(corps) }); }
+  catch (e) { throw new Error('Pas de réseau. Réessaie.'); }
+  let d;
+  try { d = await r.json(); } catch (e) { throw new Error('Le serveur ne répond pas correctement.'); }
+  if (d.erreur) throw new Error(d.erreur);
+  return d;
+}
+
+/** Action de jeu : envoie, reçoit la partie à jour, affiche ce qui a changé. */
+async function jouer(a, params, texteAttente) {
+  const fin = texteAttente ? attente(texteAttente) : null;
+  try {
+    const d = await appel(a, params);
+    if (d.etat) majEtat(d.etat);
+    return true;
+  } catch (err) {
+    banniere('Oups', err.message);
+    son('degat');
+    return false;
+  } finally {
+    if (fin) fin();
+  }
+}
+
+let rafraichissement = null;
+async function rafraichir() {
+  if (!P || !L.joueur || rafraichissement) return;
+  rafraichissement = (async () => {
+    try {
+      const d = await appel('etat', { partie: P.id, v: P.v });
+      if (d.etat) majEtat(d.etat);
+    } catch (err) {
+      if (/introuvable|ne fais pas partie/.test(err.message)) oublierPartie(P.id);
+    } finally { rafraichissement = null; }
+  })();
+  return rafraichissement;
+}
+
+/** Nouvel état reçu : on garde, on met à jour l'écran et on joue les animations de ce qui vient d'arriver. */
+function majEtat(etat) {
+  const ancien = P && P.id === etat.id ? P : null;
+  P = etat;
+  const ref = L.parties.find(x => x.id === P.id);
+  if (ref) ref.nom = P.nom;
+  L.courante = P.id;
+  memoriserPartie();
+  const dejaVu = L.vus[P.id];
+  const nouveaux = dejaVu ? P.fil.filter(e => e.t > dejaVu.t || (e.t === dejaVu.t && !dejaVu.ids.includes(e.id))) : [];
+  if (P.fil.length) {
+    const t = P.fil[0].t;
+    L.vus[P.id] = { t, ids: P.fil.filter(e => e.t === t).map(e => e.id) };
+  }
+  sauverLocal();
+  render();
+  if (nouveaux.length) nouveautes(nouveaux.reverse(), ancien);
+}
+
+/* ================= Son, vibration, bannières ================= */
 
 let AC = null;
 function son(type) {
-  if (!S.son) return;
+  if (!L.son) return;
   try {
     AC = AC || new (window.AudioContext || window.webkitAudioContext)();
     const motifs = {
@@ -195,7 +252,7 @@ function son(type) {
 function vibrer(motif) {
   try {
     if (window.Android) window.Android.vibrer(motif);
-    else if (navigator.vibrate) navigator.vibrate(motif.split(',').map(Number));
+    else if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) navigator.vibrate(motif.split(',').map(Number));
   } catch (e) { /* pas de vibreur */ }
 }
 
@@ -207,16 +264,13 @@ function banniere(titre, corps) {
   b.innerHTML = `<div class="icone">BH</div><div><div class="appli">Bad Habits Can Die · maintenant</div>
     <div class="titre">${esc(titre)}</div><div class="corps">${esc(corps)}</div></div>`;
   zone.appendChild(b);
-  setTimeout(() => b.remove(), 3500);
+  setTimeout(() => b.remove(), 4000);
 }
 
-/** Notification reçue (venant d'un autre joueur) : bannière + vraie notification Android. */
-function notifier(titre, corps) {
-  if (enSimulation) { notifsSim.push([titre, corps]); return; }
-  banniere(titre, corps);
-  son('pop');
-  vibrer('40,60,40');
-  try { if (window.Android) window.Android.notifier(titre, corps); } catch (e) { /* rien */ }
+/** Écran d'attente pendant un envoi. Renvoie la fonction qui le ferme. */
+function attente(texte) {
+  const el = ouvrir(`<div class="sablier"></div><p>${esc(texte)}</p>`, { plein: true, fermable: false });
+  return () => fermerEl(el);
 }
 
 /* ================= Confettis ================= */
@@ -249,7 +303,7 @@ function confettis(n = 150) {
 /* ================= Dessins ================= */
 
 function beteSVG(d) {
-  const h = HABITUDES[d.habit];
+  const h = HABITUDES[d.habit] || HABITUDES.autre;
   if (d.mort) {
     return `<svg class="bete-svg" viewBox="0 0 100 100" aria-hidden="true">
       <ellipse cx="50" cy="93" rx="40" ry="6" fill="#140D24"/>
@@ -261,7 +315,7 @@ function beteSVG(d) {
     </svg>`;
   }
   const r = pv(d) / PV_DEPART;
-  const s = (0.62 + 0.38 * r).toFixed(3);
+  const s = (0.62 + 0.38 * Math.min(1.3, r)).toFixed(3);
   const faible = r < 0.4;
   const yeux = faible
     ? `<ellipse cx="38" cy="47" rx="8" ry="4" fill="#fff"/><ellipse cx="62" cy="47" rx="8" ry="4" fill="#fff"/>
@@ -302,66 +356,121 @@ function medaille(b) {
   </svg>`;
 }
 
-/** Image de preuve fabriquée pour les amis fictifs. */
-function imageFictive(texte, couleur, emoji, tampon) {
-  const c = document.createElement('canvas');
-  c.width = 480; c.height = 480;
-  const x = c.getContext('2d');
-  const g = x.createLinearGradient(0, 0, 480, 480);
-  g.addColorStop(0, couleur); g.addColorStop(1, '#1B1230');
-  x.fillStyle = g; x.fillRect(0, 0, 480, 480);
-  x.font = '170px sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
-  x.fillText(emoji, 240, 205);
-  x.fillStyle = 'rgba(255,243,230,.95)'; x.fillRect(0, 360, 480, 120);
-  x.fillStyle = '#1B1230'; x.font = '800 24px Nunito, sans-serif';
-  const mots = texte.split(' '); let ligne = '', lignes = [];
-  for (const m of mots) { if (x.measureText(ligne + m).width > 430) { lignes.push(ligne); ligne = ''; } ligne += m + ' '; }
-  lignes.push(ligne);
-  lignes.slice(0, 3).forEach((l, i, t) => x.fillText(l.trim(), 240, 420 + (i - (t.length - 1) / 2) * 30));
-  x.save(); x.translate(110, 60); x.rotate(-0.2);
-  x.strokeStyle = '#FF5A4E'; x.lineWidth = 6; x.strokeRect(-90, -28, 180, 56);
-  x.fillStyle = '#FF5A4E'; x.font = '28px Bungee, Impact, sans-serif'; x.fillText(tampon, 0, 2);
-  x.restore();
-  return { id: uid(), src: c.toDataURL('image/jpeg', 0.7), video: false };
+/* ================= Médias chiffrés ================= */
+
+const CLES = {};
+function b64uVersOctets(s) {
+  s = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+function octetsVersB64u(o) {
+  let s = '';
+  o.forEach(x => { s += String.fromCharCode(x); });
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function nouvelleCle() { return octetsVersB64u(crypto.getRandomValues(new Uint8Array(32))); }
+
+async function clePartie(id) {
+  const ref = L.parties.find(x => x.id === id);
+  if (!ref || !ref.cle) throw new Error('Clé de la partie absente sur ce téléphone');
+  if (!CLES[id]) CLES[id] = crypto.subtle.importKey('raw', b64uVersOctets(ref.cle), 'AES-GCM', false, ['encrypt', 'decrypt']);
+  return CLES[id];
 }
 
-/** Photo ou vidéo choisie par le joueur : image réduite, ou vignette + vidéo gardée pour la session. */
-function traiterFichier(f) {
+function blobVersB64(blob) {
+  return new Promise((ok, ko) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result).split(',')[1] || '');
+    r.onerror = () => ko(new Error('Lecture du fichier impossible'));
+    r.readAsDataURL(blob);
+  });
+}
+
+async function chiffrer(media) {
+  const cle = await clePartie(P.id);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const clair = await media.blob.arrayBuffer();
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cle, clair));
+  const tout = new Blob([iv, ct]);
+  return { type: media.type, donnees: await blobVersB64(tout) };
+}
+
+async function dechiffrer(b64, type) {
+  const cle = await clePartie(P.id);
+  const tout = new Uint8Array(await (await fetch('data:application/octet-stream;base64,' + b64)).arrayBuffer());
+  const clair = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: tout.slice(0, 12) }, cle, tout.slice(12));
+  return URL.createObjectURL(new Blob([clair], { type }));
+}
+
+/** Photo réduite en JPEG, ou vidéo vérifiée (15 s, 20 Mo). */
+function preparerFichier(f) {
   return new Promise(resolve => {
     const url = URL.createObjectURL(f);
-    const id = uid();
-    const dessiner = (src, w, h) => {
-      const k = Math.min(1, 720 / Math.max(w, h));
-      const c = document.createElement('canvas');
-      c.width = Math.round(w * k); c.height = Math.round(h * k);
-      c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
-      return c.toDataURL('image/jpeg', 0.72);
-    };
     if (f.type.startsWith('video')) {
+      if (f.size > MAX_VIDEO) { resolve({ erreur: 'Vidéo trop lourde (20 Mo maximum). Filme moins longtemps.' }); return; }
       const v = document.createElement('video');
-      v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
-      let fait = false;
-      const finir = src => { if (fait) return; fait = true; MEDIAS[id] = url; resolve({ id, src, video: true }); };
-      v.addEventListener('loadeddata', () => { try { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); } catch (e) { finir(null); } });
-      v.addEventListener('seeked', () => { try { finir(dessiner(v, v.videoWidth, v.videoHeight)); } catch (e) { finir(null); } });
-      v.addEventListener('error', () => finir(null));
-      setTimeout(() => finir(null), 4000);
+      v.preload = 'metadata'; v.muted = true; v.src = url;
+      let fini = false;
+      const finir = r => { if (!fini) { fini = true; resolve(r); } };
+      v.addEventListener('loadedmetadata', () => {
+        if (v.duration && isFinite(v.duration) && v.duration > MAX_DUREE_VIDEO) finir({ erreur: 'Vidéo trop longue : 15 secondes maximum.' });
+        else finir({ blob: f, type: f.type || 'video/mp4', url, video: true });
+      });
+      v.addEventListener('error', () => finir({ blob: f, type: f.type || 'video/mp4', url, video: true }));
+      setTimeout(() => finir({ blob: f, type: f.type || 'video/mp4', url, video: true }), 5000);
     } else {
       const img = new Image();
-      img.onload = () => { const src = dessiner(img, img.naturalWidth, img.naturalHeight); URL.revokeObjectURL(url); resolve({ id, src, video: false }); };
-      img.onerror = () => resolve(null);
+      img.onload = () => {
+        const k = Math.min(1, 1280 / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob(b => {
+          if (!b) { resolve({ erreur: 'Photo illisible.' }); return; }
+          resolve({ blob: b, type: 'image/jpeg', url: URL.createObjectURL(b), video: false });
+        }, 'image/jpeg', 0.82);
+      };
+      img.onerror = () => resolve({ erreur: 'Photo illisible. Essaie une autre.' });
       img.src = url;
     }
   });
 }
 
-function mediaHTML(m) {
-  if (!m) return '';
-  if (m.video && MEDIAS[m.id]) {
-    return `<div class="evt-media"><video src="${MEDIAS[m.id]}" ${m.src ? `poster="${m.src}"` : ''} controls playsinline preload="metadata"></video></div>`;
+function mediaHTML(id) {
+  if (!id) return '';
+  const m = P.medias[id];
+  if (!m) return `<div class="evt-media efface"><div class="vide">🔥 Média effacé</div></div>`;
+  const video = m.type.startsWith('video');
+  if (MEDIAS[id]) {
+    return `<div class="evt-media">${video
+      ? `<video src="${MEDIAS[id]}" controls playsinline preload="metadata"></video>`
+      : `<img src="${MEDIAS[id]}" alt="Preuve">`}</div>`;
   }
-  if (!m.src) return m.video ? `<div class="evt-media"><div class="vide">Vidéo envoyée</div></div>` : '';
-  return `<div class="evt-media"><img src="${m.src}" alt="Preuve">${m.video ? '<div class="lecture">▶</div>' : ''}</div>`;
+  return video
+    ? `<div class="evt-media" data-media="${id}"><button class="vide voir-media" data-a="voirMedia" data-id="${id}">▶ Voir la vidéo<span class="discret">Chiffrée, effacée sous 24 h</span></button></div>`
+    : `<div class="evt-media" data-media="${id}" data-auto="1"><div class="vide">Déchiffrement…</div></div>`;
+}
+
+const enChargement = {};
+async function chargerMedia(id) {
+  if (MEDIAS[id] || enChargement[id] || !P.medias[id]) return;
+  const partie = P.id;
+  enChargement[id] = true;
+  try {
+    const d = await appel('media', { partie, id });
+    if (d.efface) { delete P.medias[id]; return; }
+    if (!P || P.id !== partie) return;
+    MEDIAS[id] = await dechiffrer(d.donnees, d.type);
+  } catch (err) {
+    document.querySelectorAll(`[data-media="${id}"]`).forEach(el => { el.innerHTML = '<div class="vide">Impossible de déchiffrer ce média</div>'; });
+    return;
+  } finally { delete enChargement[id]; }
+  document.querySelectorAll(`[data-media="${id}"]`).forEach(el => { el.outerHTML = mediaHTML(id); });
+}
+function chargerMediasVisibles() {
+  document.querySelectorAll('[data-media][data-auto]').forEach(el => chargerMedia(el.dataset.media));
 }
 
 /* ================= Calques (feuilles, écrans pleins) ================= */
@@ -391,80 +500,72 @@ function fermerEl(el) { const c = pile.find(p => p.el === el); if (c) fermer(c);
 
 window.retourArriere = function () {
   if (pile.length) { const c = pile[pile.length - 1]; if (c.fermable) fermer(c); return true; }
-  if (S.pret && S.onglet !== 'fil') { S.onglet = 'fil'; render(true); return true; }
-  if (!S.pret && S.onb.etape > 0) { S.onb.etape--; render(true); return true; }
+  const mode = modeCourant();
+  if (mode === 'jeu' && L.onglet !== 'fil') { L.onglet = 'fil'; render(true); return true; }
+  if ((mode === 'creer' || mode === 'rejoindre') && E.etape > 0) { E.etape--; render(true); return true; }
+  if (mode === 'creer' || mode === 'rejoindre' || (mode === 'hub' && P)) { quitterEcran(); return true; }
+  if (mode === 'accueil' && E.etape > 0) { E.etape--; render(true); return true; }
   return false;
 };
 
+function quitterEcran() {
+  E = { mode: null, etape: 0, b: null, apercu: null };
+  L.invitation = null;
+  sauverLocal();
+  render(true);
+}
+
 /* ================= Fil d'actualité ================= */
-
-function evt(type, donnees) {
-  const e = Object.assign({ id: uid(), t: maintenant(), type, reac: { respect: 0, honte: 0, force: 0, mdr: 0 }, mes: {} }, donnees);
-  if (e.qui && e.qui !== 'moi') {
-    // les autres réagissent déjà un peu
-    for (const [k] of REACTIONS) if (Math.random() < 0.35) e.reac[k] = 1 + Math.floor(Math.random() * 3);
-  }
-  S.fil.unshift(e);
-  if (S.fil.length > 120) S.fil.length = 120;
-  return e;
-}
-
-/** Les amis fictifs réagissent à ce que tu publies, en direct. */
-function reactionsDesAmis(e, types) {
-  if (enSimulation) { types.forEach(k => { e.reac[k] += 1 + Math.floor(Math.random() * 2); }); return; }
-  let n = 0;
-  for (const b of BOTS) {
-    if (Math.random() < 0.75) {
-      n++;
-      setTimeout(() => {
-        const k = hasard(types);
-        e.reac[k]++;
-        sauver();
-        if (S.onglet === 'fil') render();
-      }, 900 + n * 900 + Math.random() * 600);
-    }
-  }
-}
 
 function texteEvt(e) {
   const d = e.defi ? defi(e.defi) : null;
-  const h = d ? HABITUDES[d.habit] : null;
-  const N = id => `<b>${esc(id === 'moi' ? moi().nom : nom(id))}</b>`;
-  const g = e.gage ? S.gages.find(x => x.id === e.gage) : null;
+  const h = d ? (HABITUDES[d.habit] || HABITUDES.autre) : { e: '' };
+  const N = id => `<b>${esc(nom(id))}</b>`;
+  const g = e.gage ? P.gages.find(x => x.id === e.gage) : null;
   const boiteGage = g && g.texte ? `<div class="evt-gage">${esc(g.texte)}</div>` : '';
+  const bete = d ? `<b>${esc(d.nom)}</b>` : '';
   switch (e.type) {
-    case 'go': return `${N(e.qui)} lance sa partie contre <b>${esc(d.nom)}</b> ${h.e}. 365 jours, aucune pitié.`;
+    case 'rejoint': return d ? `${N(e.qui)} rejoint la partie et affronte ${bete} ${h.e}.` : `${N(e.qui)} rejoint la partie en spectateur.`;
+    case 'lancement': return `${N(e.qui)} a appuyé sur GO. <b>365 jours</b>, aucune pitié.`;
+    case 'go': return `${N(e.qui)} part en guerre contre ${bete} ${h.e}.`;
     case 'aveu': return e.apres
-      ? `${N(e.qui)} avoue après la dénonciation de ${N(e.apres)}. <b>${esc(d.nom)}</b> reprend ${PV_RECHUTE} PV.`
-      : `${N(e.qui)} a craqué ${h.e}. <b>${esc(d.nom)}</b> reprend ${PV_RECHUTE} PV.`;
+      ? `${N(e.qui)} a craqué, balancé par ${N(e.apres)} ${h.e}. ${bete} reprend ${PV_RECHUTE} PV.`
+      : `${N(e.qui)} a craqué ${h.e}. ${bete} reprend ${PV_RECHUTE} PV.`;
     case 'accuse': return `${N(e.qui)} accuse ${N(e.cible)} d'avoir craqué ${h.e}. Preuve à l'appui.`;
-    case 'conteste': return `${N(e.qui)} conteste. La partie vote…`;
-    case 'innocent': return `Le vote innocente ${N(e.qui)}. Fausse alerte.`;
-    case 'coupable': return `Le vote déclare ${N(e.qui)} coupable. Rechute comptée.`;
+    case 'conteste': return `${N(e.qui)} conteste l'accusation de ${N(e.accusateur)}. La partie vote.`;
+    case 'silence': return `${N(e.qui)} n'a pas répondu à l'accusation de ${N(e.accusateur)}. La partie vote.`;
+    case 'innocent': return `Verdict : ${N(e.qui)} est <b>innocent</b> (${e.contre} contre ${e.pour}). Fausse alerte.`;
+    case 'coupable': return `Verdict : ${N(e.qui)} est <b>coupable</b> (${e.pour} contre ${e.contre}).`;
     case 'tirage': return `Le sort désigne ${N(e.bourreau)} pour choisir le châtiment de ${N(e.qui)}.`;
     case 'gage': return `${N(e.bourreau)} a choisi le châtiment de ${N(e.qui)} :${boiteGage}`;
-    case 'delai': return `${N(e.bourreau)} n'a pas choisi à temps. Le hasard tranche pour ${N(e.qui)} :${boiteGage}`;
+    case 'delai': return e.bourreau
+      ? `${N(e.bourreau)} n'a pas choisi à temps. Le hasard tranche pour ${N(e.qui)} :${boiteGage}`
+      : `Personne pour choisir : le hasard tranche pour ${N(e.qui)} :${boiteGage}`;
     case 'preuve': return `${N(e.qui)} a fait son gage. Preuve à l'appui.${boiteGage}`;
-    case 'valide': return `${N(e.bourreau)} valide la preuve de ${N(e.qui)}. Dette payée.`;
+    case 'valide': return e.auto ? `Preuve de ${N(e.qui)} validée d'office. Dette payée.` : `${N(e.bourreau)} valide la preuve de ${N(e.qui)}. Dette payée.`;
     case 'refuse': return `${N(e.bourreau)} refuse la preuve de ${N(e.qui)}. À refaire.`;
-    case 'badge': { const b = BADGES.find(x => x.id === e.badge); return `${N(e.qui)} débloque le badge <b>${esc(b.nom)}</b> ${b.g}`; }
-    case 'palier': return `${N(e.qui)} tient depuis <b>${e.n} jours</b> ${h.e}.`;
-    case 'mort': return `<b>${esc(d.nom)}</b> est morte. ${N(e.qui)} l'a abattue après ${e.n} jours. 🪦`;
-    case 'survit': return `<b>${esc(d.nom)}</b> a survécu à l'année de ${N(e.qui)}. Revanche ?`;
-    case 'pari': return `${N('moi')} parie <b>${e.mise} pts</b> que ${N(e.qui)} tient encore 7 jours.`;
-    case 'pari-gagne': return `${N('moi')} gagne son pari sur ${N(e.qui)} : <b>+${e.gain} pts</b>.`;
-    case 'pari-perdu': return `${N('moi')} perd son pari sur ${N(e.qui)}. Les ${e.mise} pts sont partis.`;
+    case 'badge': { const b = BADGES.find(x => x.id === e.badge); return b ? `${N(e.qui)} débloque le badge <b>${esc(b.nom)}</b> ${b.g}` : ''; }
+    case 'palier': return `${N(e.qui)} tient depuis <b>${e.n} jours</b> contre ${bete} ${h.e}.`;
+    case 'mort': return `${bete} est morte. ${N(e.qui)} l'a abattue en ${e.n} jours. 🪦`;
+    case 'survit': return `${bete} a survécu à l'année de ${N(e.qui)}. Revanche ?`;
+    case 'pari': return `${N(e.qui)} parie <b>${e.mise} pts</b> que ${N(e.cible)} tient encore 7 jours.`;
+    case 'pari-gagne': return `${N(e.qui)} gagne son pari sur ${N(e.cible)} : <b>+${e.gain} pts</b>.`;
+    case 'pari-perdu': return `${N(e.qui)} perd son pari sur ${N(e.cible)}. Les ${e.mise} pts sont partis.`;
     default: return '';
   }
 }
 
 function evtHTML(e) {
-  const reac = REACTIONS.map(([k, em]) =>
-    `<button class="reac ${e.mes[k] ? 'mienne' : ''}" data-a="reagir" data-evt="${e.id}" data-k="${k}">${em} ${e.reac[k] || ''}</button>`).join('');
+  const texte = texteEvt(e);
+  if (!texte) return '';
+  const reac = REACTIONS.map(([k, em]) => {
+    const l = e.reac[k] || [];
+    return `<button class="reac ${l.includes(L.joueur) ? 'mienne' : ''}" data-a="reagir" data-evt="${e.id}" data-k="${k}">${em} ${l.length || ''}</button>`;
+  }).join('');
   return `<article class="carte evt type-${e.type}">
     ${avatar(e.qui)}
     <div style="min-width:0">
-      <div class="evt-texte">${texteEvt(e)}</div>
+      <div class="evt-texte">${texte}</div>
       <div class="evt-heure">${relatif(e.t)}</div>
       ${mediaHTML(e.media)}
       <div class="reactions">${reac}</div>
@@ -475,23 +576,34 @@ function evtHTML(e) {
 /* ================= Tâches (ce que la partie attend de toi) ================= */
 
 function taches() {
-  const t = [];
-  for (const a of S.accusations) if (a.cible === 'moi' && a.statut === 'ouverte') t.push({ type: 'accusation', a });
-  for (const g of S.gages) {
-    if (g.bourreau === 'moi' && g.statut === 'attente') t.push({ type: 'choisir', g });
-    if (g.bourreau === 'moi' && g.statut === 'prouve') t.push({ type: 'juger', g });
-    if (g.victime === 'moi' && g.statut === 'choisi') t.push({ type: 'faire', g });
-    if (g.victime === 'moi' && g.statut === 'attente') t.push({ type: 'patience', g });
-    if (g.victime === 'moi' && g.statut === 'prouve') t.push({ type: 'validation', g });
+  const t = [], moi = L.joueur;
+  for (const a of P.accusations) {
+    if (a.cible === moi && a.statut === 'ouverte') t.push({ type: 'accusation', a });
+    if (a.statut === 'vote' && a.cible !== moi && !(moi in a.votes)) t.push({ type: 'voter', a });
+  }
+  for (const g of P.gages) {
+    if (g.bourreau === moi && g.statut === 'attente') t.push({ type: 'choisir', g });
+    if (g.bourreau === moi && g.statut === 'prouve') t.push({ type: 'juger', g });
+    if (g.victime === moi && g.statut === 'choisi') t.push({ type: 'faire', g });
+    if (g.victime === moi && g.statut === 'attente') t.push({ type: 'patience', g });
+    if (g.victime === moi && g.statut === 'prouve') t.push({ type: 'validation', g });
   }
   return t;
 }
 
 function tacheHTML(t) {
   if (t.type === 'accusation') {
+    const d = defi(t.a.defi);
     return `<div class="carte-tache"><span class="etiquette">ON T'ACCUSE</span>
-      <p>${esc(nom(t.a.qui))} affirme que tu as craqué sur ${esc(HABITUDES[defi(t.a.defi).habit].nom.toLowerCase())}.</p>
+      <p>${esc(nom(t.a.qui))} affirme que tu as craqué sur ${esc((HABITUDES[d.habit] || HABITUDES.autre).nom.toLowerCase())}.</p>
+      <span class="minuteur" data-ech="${t.a.echeance}">Il te reste ${resteTemps(t.a.echeance)}</span>
       <button class="btn corail" data-a="repondre" data-id="${t.a.id}">Voir la preuve et répondre</button></div>`;
+  }
+  if (t.type === 'voter') {
+    return `<div class="carte-tache"><span class="etiquette">VOTE</span>
+      <p>${esc(nom(t.a.cible))} a-t-il craqué ? ${esc(nom(t.a.qui))} l'accuse.</p>
+      <span class="minuteur" data-ech="${t.a.echeance}">Il te reste ${resteTemps(t.a.echeance)}</span>
+      <button class="btn soleil" data-a="voter" data-id="${t.a.id}">Voir la preuve et voter</button></div>`;
   }
   const g = t.g, v = nom(g.victime), b = nom(g.bourreau);
   switch (t.type) {
@@ -500,26 +612,27 @@ function tacheHTML(t) {
       <button class="btn soleil" data-a="choisir" data-id="${g.id}">Choisir le gage</button></div>`;
     case 'juger': return `<div class="carte-tache"><span class="etiquette">PREUVE À JUGER</span>
       <p>${esc(v)} dit avoir fait son gage : « ${esc(g.texte)} ».</p>
+      <span class="minuteur" data-ech="${g.prouveA + 24 * H}" data-txt="Validée d'office dans ">Validée d'office dans ${resteTemps(g.prouveA + 24 * H)}</span>
       <button class="btn soleil" data-a="juger" data-id="${g.id}">Juger la preuve</button></div>`;
     case 'faire': return `<div class="carte-tache"><span class="etiquette">TON CHÂTIMENT</span>
-      <p>${esc(g.texte)}</p><span class="discret">Choisi par ${esc(b)}</span>
+      <p>${esc(g.texte)}</p><span class="discret">${g.bourreau ? 'Choisi par ' + esc(b) : 'Tiré au hasard'}</span>
       <button class="btn corail" data-a="prouver" data-id="${g.id}">J'envoie ma preuve</button></div>`;
     case 'patience': return `<div class="carte-tache"><span class="etiquette">ÇA SE PRÉPARE…</span>
-      <p>${esc(b)} réfléchit à ton châtiment.</p><span class="minuteur" data-ech="${g.echeance}">Il lui reste ${resteTemps(g.echeance)}</span></div>`;
+      <p>${esc(b)} réfléchit à ton châtiment.</p><span class="minuteur" data-ech="${g.echeance}" data-txt="Il lui reste ">Il lui reste ${resteTemps(g.echeance)}</span></div>`;
     case 'validation': return `<div class="carte-tache"><span class="etiquette">EN ATTENTE</span>
-      <p>${esc(b)} examine ta preuve.</p></div>`;
+      <p>${esc(b)} examine ta preuve. Sans réponse, elle est validée au bout de 24 h.</p></div>`;
   }
   return '';
 }
 
-/* ================= Écrans ================= */
+/* ================= Écrans de la partie ================= */
 
 function carteBete(d, grande) {
-  const h = HABITUDES[d.habit];
-  const p = pv(d), r = p / PV_DEPART;
-  const avant = PV_AFFICHE[d.id] != null ? PV_AFFICHE[d.id] / PV_DEPART : r;
+  const h = HABITUDES[d.habit] || HABITUDES.autre;
+  const p = pv(d), r = Math.min(1, p / PV_DEPART);
+  const avant = PV_AFFICHE[d.id] != null ? Math.min(1, PV_AFFICHE[d.id] / PV_DEPART) : r;
   const sous = d.mort ? `Abattue au jour ${Math.floor((d.mort - d.debut) / J)}`
-    : d.survit ? 'A survécu à l\'année' : `Jour ${jours(d)} / ${DUREE}`;
+    : d.survit ? 'A survécu à l\'année' : d.debut ? `Jour ${jours(d)} / ${DUREE}` : 'En attente du GO';
   return `<div class="bete-carte ${grande ? 'grande' : ''}" data-defi="${d.id}">
     ${beteSVG(d)}
     <div style="min-width:0;width:100%">
@@ -530,102 +643,115 @@ function carteBete(d, grande) {
       <div class="stats-bete">
         <span class="stat flamme"><span class="flamme-ico">🔥</span><b>${serie(d)}</b> j</span>
         <span class="stat">Rechutes <b>${d.rechutes.length}</b></span>
-        ${grande && enJeu(d) ? `<span class="stat">Marge <b>${marge(d)}</b></span>` : ''}
+        ${grande && enJeu(d) && d.debut ? `<span class="stat">Marge <b>${marge(d)}</b></span>` : ''}
       </div>
     </div>
   </div>`;
 }
 
+function carteNotifs() {
+  if (L.appareil && 'Notification' in window && Notification.permission === 'granted') return '';
+  if (window.Android) return '';
+  if (ios && !autonome()) {
+    return `<div class="carte-tache"><span class="etiquette">NOTIFICATIONS</span>
+      <p>Sur iPhone, ajoute d'abord l'appli à l'écran d'accueil : bouton <b>Partager</b> puis <b>« Sur l'écran d'accueil »</b>. Ouvre-la ensuite depuis l'icône.</p></div>`;
+  }
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return '';
+  return `<div class="carte-tache"><span class="etiquette">NOTIFICATIONS</span>
+    <p>Active-les pour savoir quand quelqu'un craque, et quand le sort te désigne.</p>
+    <button class="btn soleil" data-a="activerNotifs">Activer les notifications</button></div>`;
+}
+
 function vueFil() {
   const mes = mesDefis().filter(enJeu);
   const t = taches();
-  let html = '';
-  if (mes.length) {
-    html += `<div class="titre-section">Ta bête</div><div class="pile">${mes.map(d => carteBete(d, false)).join('')}</div>`;
-  }
+  let html = carteNotifs();
+  if (mes.length) html += `<div class="titre-section">${mes.length > 1 ? 'Tes bêtes' : 'Ta bête'}</div><div class="pile">${mes.map(d => carteBete(d, false)).join('')}</div>`;
   if (t.length) html += `<div class="titre-section">À faire</div><div class="pile">${t.map(tacheHTML).join('')}</div>`;
-  html += `<div class="titre-section">Le fil · ${esc(S.partie.nom)}</div>`;
-  html += S.fil.length ? `<div class="pile">${S.fil.map(evtHTML).join('')}</div>` : `<div class="vide">Rien pour l'instant.</div>`;
+  html += `<div class="titre-section">Le fil · ${esc(P.nom)}</div>`;
+  const evts = P.fil.map(evtHTML).filter(Boolean);
+  html += evts.length ? `<div class="pile">${evts.join('')}</div>` : `<div class="vide">Rien pour l'instant.</div>`;
   return html;
 }
 
 function scoreJoueur(id) {
-  const ds = S.defis.filter(d => d.qui === id);
-  if (!ds.length) return 0;
+  const ds = P.defis.filter(d => d.qui === id);
+  if (!ds.length) return -1;
   return ds.reduce((s, d) => s + (PV_DEPART - pv(d)) / PV_DEPART, 0) / ds.length;
 }
 
 function vuePartie() {
-  const j = Math.max(0, Math.min(DUREE, Math.floor((maintenant() - S.partie.debut) / J)));
-  const ids = Object.keys(S.membres).sort((a, b) => scoreJoueur(b) - scoreJoueur(a));
+  const j = P.debut ? Math.max(0, Math.min(DUREE, Math.floor((maintenant() - P.debut) / J))) : 0;
+  const ids = Object.keys(P.membres).sort((a, b) => scoreJoueur(b) - scoreJoueur(a));
   const joueurs = ids.map((id, i) => {
-    const ds = S.defis.filter(d => d.qui === id);
+    const ds = P.defis.filter(d => d.qui === id);
     const minis = ds.map(d => {
-      const p = pv(d), r = p / PV_DEPART;
+      const p = pv(d), r = Math.min(1, p / PV_DEPART);
       return `<div class="mini-defi ${d.mort ? 'mort' : ''}">
-        <span>${HABITUDES[d.habit].e} ${esc(d.nom)} ${d.mort ? '🪦' : `· <b>${p}</b> PV`}</span>
+        <span>${(HABITUDES[d.habit] || HABITUDES.autre).e} ${esc(d.nom)} ${d.mort ? '🪦' : `· <b>${p}</b> PV`}</span>
         <span class="serie">${d.mort ? 'ABATTUE' : '🔥 ' + serie(d) + ' j'}</span>
         ${enJeu(d) ? `<div class="barre ${r < 0.4 ? 'faible' : ''}"><i style="width:${(r * 100).toFixed(1)}%"></i></div>` : ''}
       </div>`;
     }).join('');
     const vivant = ds.find(enJeu);
-    const pariEnCours = vivant && S.paris.some(p => p.defi === vivant.id && p.statut === 'en cours');
-    const actions = id === 'moi' ? '' : `<div class="joueur-actions">
-        ${vivant ? `<button class="btn petit corail" data-a="denoncer" data-id="${id}">Dénoncer</button>` : ''}
-        ${vivant ? `<button class="btn petit fantome" data-a="parier" data-id="${vivant.id}" ${pariEnCours ? 'disabled' : ''}>${pariEnCours ? 'Pari en cours' : 'Parier'}</button>` : ''}
+    const pariEnCours = vivant && P.paris.some(x => x.qui === L.joueur && x.defi === vivant.id && x.statut === 'en cours');
+    const actions = id === L.joueur || !vivant ? '' : `<div class="joueur-actions">
+        <button class="btn petit corail" data-a="denoncer" data-id="${id}">Dénoncer</button>
+        <button class="btn petit fantome" data-a="parier" data-id="${vivant.id}" ${pariEnCours ? 'disabled' : ''}>${pariEnCours ? 'Pari en cours' : 'Parier'}</button>
       </div>`;
     return `<div class="carte joueur">
-      <div class="rang ${i === 0 ? 'or' : ''}">${i + 1}</div>${avatar(id)}
-      <div class="joueur-nom">${esc(nom(id))}${id === 'moi' ? ' <span class="discret">(toi)</span>' : ''}</div>
-      <div class="joueur-defis">${minis || '<span class="discret">Aucun défi</span>'}</div>${actions}
+      <div class="rang ${i === 0 && ds.length ? 'or' : ''}">${i + 1}</div>${avatar(id)}
+      <div class="joueur-nom">${esc(nom(id))}${id === L.joueur ? ' <span class="discret">(toi)</span>' : ''}
+        <span class="discret">· ${points(id)} pts</span></div>
+      <div class="joueur-defis">${minis || '<span class="discret">Spectateur</span>'}</div>${actions}
     </div>`;
   }).join('');
-  const paris = S.paris.filter(p => p.statut === 'en cours');
+  const paris = P.paris.filter(x => x.qui === L.joueur && x.statut === 'en cours');
   return `<div class="carte partie-tete">
-      <div class="partie-nom">${esc(S.partie.nom)}</div>
-      <div class="code">CODE ${S.partie.code}</div>
+      <div class="partie-nom">${esc(P.nom)}</div>
+      <div class="code">CODE ${esc(P.code)}</div>
       <div class="compte-annee"><span class="discret">Jour <b>${j}</b> / ${DUREE}</span>
         <div class="barre"><i style="width:${(j / DUREE * 100).toFixed(1)}%"></i></div></div>
       <button class="btn fantome" data-a="inviter">Inviter quelqu'un</button>
     </div>
     <div class="titre-section">Classement</div>
     <div class="pile">${joueurs}</div>
-    ${paris.length ? `<div class="titre-section">Tes paris</div><div class="pile">${paris.map(p => {
-      const d = defi(p.defi);
-      return `<div class="carte"><b>${p.mise} pts</b> sur ${esc(nom(d.qui))} · fin ${relatifFutur(p.fin)}</div>`;
+    ${paris.length ? `<div class="titre-section">Tes paris</div><div class="pile">${paris.map(x => {
+      const d = defi(x.defi);
+      return `<div class="carte"><b>${x.mise} pts</b> sur ${esc(nom(d.qui))} · résultat ${relatifFutur(x.fin)}</div>`;
     }).join('')}</div>` : ''}`;
 }
 
-function relatifFutur(t) {
-  const d = t - maintenant();
-  if (d <= 0) return 'maintenant';
-  const n = Math.ceil(d / J);
-  return 'dans ' + n + (n > 1 ? ' jours' : ' jour');
-}
-
 function vueBadges() {
-  const n = Object.keys(S.badges).length;
+  const mb = moiMembre().badges;
+  const n = Object.keys(mb).length;
   return `<div class="carte" style="display:flex;align-items:center;gap:14px">
       <div class="compteur-badges">${n}<span style="font-size:20px;color:var(--brume)">/${BADGES.length}</span></div>
       <div><b>Badges débloqués</b><div class="discret">Chaque badge rapporte 10 points.</div></div>
     </div>
     <div class="titre-section">Collection</div>
     <div class="grille-badges">${BADGES.map(b => {
-      const ok = S.badges[b.id];
+      const ok = mb[b.id];
       const neuf = ok && maintenant() - ok < J;
       return `<div class="badge ${ok ? '' : 'verrou'} ${neuf ? 'neuf' : ''}" data-a="voirBadge" data-id="${b.id}">
         ${medaille(b)}<div class="badge-nom">${esc(b.nom)}</div><div class="badge-desc">${esc(b.desc)}</div></div>`;
     }).join('')}</div>`;
 }
 
+function listeParties() {
+  return L.parties.map(x => `<button class="carte partie-ligne ${P && x.id === P.id ? 'actuelle' : ''}" data-a="ouvrirPartie" data-id="${x.id}">
+      <b>${esc(x.nom)}</b><span class="discret">${P && x.id === P.id ? 'affichée' : 'ouvrir'}</span></button>`).join('');
+}
+
 function vueMoi() {
-  const m = moi();
+  const m = moiMembre();
   const mes = mesDefis();
   const actifs = mes.filter(enJeu).length;
+  const notifOk = L.appareil && 'Notification' in window && Notification.permission === 'granted';
   return `<div class="carte" style="display:flex;align-items:center;gap:14px">
-      ${avatar('moi', 'grand')}
+      ${avatar(L.joueur, 'grand')}
       <div style="min-width:0"><div class="partie-nom" style="font-size:22px">${esc(m.nom)}</div>
-      <div class="discret">${m.points} points · ${Object.keys(S.badges).length} badges</div></div>
+      <div class="discret">${points(L.joueur)} points · ${Object.keys(m.badges).length} badges</div></div>
     </div>
     <div class="titre-section">Tes bêtes</div>
     <div class="pile">${mes.map(d => `${carteBete(d, true)}
@@ -634,29 +760,26 @@ function vueMoi() {
       <button class="btn fantome large" data-a="ajouterDefi" ${actifs >= MAX_DEFIS ? 'disabled' : ''}>
         ${actifs >= MAX_DEFIS ? `${MAX_DEFIS} défis en cours, c'est le maximum` : `Ajouter un défi (${actifs}/${MAX_DEFIS})`}</button>
     </div>
+    <div class="titre-section">Tes parties</div>
+    <div class="pile">${listeParties()}
+      <button class="btn fantome large" data-a="hub">Créer ou rejoindre une autre partie</button></div>
     <div class="titre-section">Réglages</div>
-    <div class="carte interrupteur"><span>Sons</span>
-      <button class="btn petit ${S.son ? 'menthe' : 'fantome'}" data-a="son">${S.son ? 'Activés' : 'Coupés'}</button></div>
-    <div class="titre-section">Mode démo</div>
-    <div class="carte demo pile">
-      <div class="discret">Sarah, Tom, Nadia et Max sont des amis fictifs pour tester le jeu seul. Avance le temps pour voir la bête perdre ses PV, les badges tomber et les amis craquer.</div>
-      <div class="demo-boutons">
-        <button class="btn petit soleil" data-a="avancer" data-n="1">+1 jour</button>
-        <button class="btn petit soleil" data-a="avancer" data-n="7">+7 jours</button>
-        <button class="btn petit soleil" data-a="avancer" data-n="30">+30 jours</button>
-      </div>
-      <button class="btn petit fantome" data-a="reinitialiser">Tout recommencer</button>
-    </div>`;
+    <div class="pile">
+      <div class="carte interrupteur"><span>Sons</span>
+        <button class="btn petit ${L.son ? 'menthe' : 'fantome'}" data-a="son">${L.son ? 'Activés' : 'Coupés'}</button></div>
+      <div class="carte interrupteur"><span>Notifications</span>
+        <button class="btn petit ${notifOk ? 'menthe' : 'soleil'}" data-a="activerNotifs">${notifOk ? 'Activées' : 'Activer'}</button></div>
+    </div>
+    <p class="discret" style="text-align:center;margin:18px 0 6px">Photos et vidéos chiffrées sur ton téléphone, effacées sous 24 h.</p>`;
 }
 
-/* ---------- Accueil et création ---------- */
+/* ---------- Avant la partie : accueil, création, invitation, salon ---------- */
 
-function etapes(n) { return `<div class="etapes">${[1, 2, 3, 4].map(i => `<i class="${i <= n ? 'fait' : ''}"></i>`).join('')}</div>`; }
+function etapes(n, total) { return `<div class="etapes">${Array.from({ length: total }, (_, i) => `<i class="${i < n ? 'fait' : ''}"></i>`).join('')}</div>`; }
 
 function vueAccueil() {
-  const o = S.onb;
-  switch (o.etape) {
-    case 0: return `<div class="plein accueil" style="position:relative;min-height:100%;background:transparent;padding:20px 0">
+  if (E.etape === 0) {
+    return `<div class="plein accueil" style="position:relative;min-height:100%;background:transparent;padding:20px 0">
         <div></div>
         <div style="display:flex;flex-direction:column;gap:22px;align-items:center">
           <div class="logo-geant">BAD<br>HABITS<span>CAN DIE</span></div>
@@ -667,41 +790,33 @@ function vueAccueil() {
             <div class="carte"><b>Tu craques ? Tu te balances.</b> Le sort désigne un proche qui choisit ton châtiment.</div>
           </div>
         </div>
-        <button class="btn corail large" data-a="onbSuivant">Commencer</button>
-      </div>`;
-    case 1: return `<div class="pile" style="gap:18px">${etapes(1)}
-        <h2 class="partie-nom">Qui es-tu ?</h2>
-        <div class="champ"><label for="pseudo">Ton pseudo</label>
-          <input id="pseudo" maxlength="16" placeholder="Greg" value="${esc(o.pseudo)}" autocomplete="off"></div>
-        <div class="champ"><label>Ta couleur</label><div class="couleurs">${COULEURS.map(c =>
-          `<button class="couleur ${c === o.couleur ? 'choisie' : ''}" style="background:${c}" data-a="couleur" data-c="${c}" aria-label="Couleur"></button>`).join('')}</div></div>
-        <button class="btn corail large" data-a="onbSuivant" id="suite1" ${o.pseudo.trim() ? '' : 'disabled'}>Suivant</button>
-      </div>`;
-    case 2: return `<div class="pile" style="gap:18px">${etapes(2)}
-        <h2 class="partie-nom">Ta mauvaise habitude</h2>
-        ${grilleHabitudes(o.habit, [])}
-        ${o.habit === 'autre' ? `<div class="champ"><label for="nomAutre">Nomme ta bête</label>
-          <input id="nomAutre" maxlength="24" placeholder="Le Grignotage" value="${esc(o.nomAutre)}"></div>` : ''}
-        <button class="btn corail large" data-a="onbSuivant" ${o.habit && (o.habit !== 'autre' || o.nomAutre.trim()) ? '' : 'disabled'}>Suivant</button>
-      </div>`;
-    case 3: return `<div class="pile" style="gap:16px">${etapes(3)}
-        <h2 class="partie-nom">Tes châtiments</h2>
-        <p class="discret" style="margin:0">Si tu craques, celui qui est tiré au sort pourra piocher ici s'il n'a pas d'idée. Au moins 3.</p>
-        ${editeurGages(o.gages)}
-        <button class="btn corail large" data-a="onbSuivant" ${o.gages.length >= 3 ? '' : 'disabled'}>Suivant (${o.gages.length}/3)</button>
-      </div>`;
-    case 4: return `<div class="pile" style="gap:16px">${etapes(4)}
-        <h2 class="partie-nom">Ta partie</h2>
-        <div class="champ"><label for="nomPartie">Nom de la partie</label>
-          <input id="nomPartie" maxlength="24" value="${esc(o.nomPartie)}"></div>
-        <button class="btn fantome" data-a="inviter">Envoyer le lien d'invitation</button>
-        <div class="titre-section" style="margin:6px 0 0">Ils ont rejoint</div>
-        <div class="pile" id="rejoints">${BOTS.slice(0, o.rejoints).map(carteRejoint).join('')}</div>
-        <div class="discret" id="attente" ${o.rejoints < BOTS.length ? '' : 'hidden'}>En attente des amis… (démo : 4 amis fictifs)</div>
-        <button class="btn corail large" id="btnGo" data-a="go" style="font-family:var(--f-titre);font-size:26px;padding:18px" ${o.rejoints < 1 ? 'disabled' : ''}>GO</button>
+        <button class="btn corail large" data-a="etapeSuivante">Commencer</button>
       </div>`;
   }
-  return '';
+  const b = E.b || (E.b = { pseudo: L.pseudo || '', couleur: L.couleur || COULEURS[0] });
+  return `<div class="pile" style="gap:18px">
+      <h2 class="partie-nom">Qui es-tu ?</h2>
+      <div class="champ"><label for="pseudo">Ton pseudo</label>
+        <input id="pseudo" maxlength="16" placeholder="Greg" value="${esc(b.pseudo)}" autocomplete="off"></div>
+      <div class="champ"><label>Ta couleur</label><div class="couleurs">${COULEURS.map(c =>
+        `<button class="couleur ${c === b.couleur ? 'choisie' : ''}" style="background:${c}" data-a="couleur" data-c="${c}" aria-label="Couleur"></button>`).join('')}</div></div>
+      <button class="btn corail large" data-a="inscrire" id="suite" ${b.pseudo.trim() ? '' : 'disabled'}>C'est moi</button>
+    </div>`;
+}
+
+function vueHub() {
+  return `<div class="pile" style="gap:16px">
+      <div class="logo-geant" style="font-size:34px;text-align:left">BAD HABITS<span>CAN DIE</span></div>
+      <p class="discret" style="margin:0">Salut ${esc(L.pseudo)} ! Lance une partie avec tes proches, ou rejoins la leur.</p>
+      <button class="btn corail large" data-a="creer">Créer une partie</button>
+      <div class="carte pile">
+        <b>Tu as reçu un lien ?</b>
+        <div class="ligne-champ champ"><input id="lienColle" placeholder="Colle le lien ici" autocomplete="off">
+          <button class="btn soleil petit" data-a="collerLien">OK</button></div>
+      </div>
+      ${L.parties.length ? `<div class="titre-section">Tes parties</div><div class="pile">${listeParties()}</div>` : ''}
+      ${carteNotifs()}
+    </div>`;
 }
 
 function grilleHabitudes(choix, exclues) {
@@ -714,44 +829,138 @@ function editeurGages(liste) {
   const restantes = SUGGESTIONS.filter(s => !liste.includes(s));
   return `<div class="liste-gages">${liste.map((g, i) =>
       `<div class="gage-ligne choisi">${esc(g)}<button class="x" data-a="retirerGage" data-i="${i}" aria-label="Retirer">×</button></div>`).join('')}</div>
-    <div class="ligne-champ champ"><input id="nouveauGage" maxlength="80" placeholder="Invente ton châtiment">
+    <div class="ligne-champ champ"><input id="nouveauGage" maxlength="100" placeholder="Invente ton châtiment">
       <button class="btn soleil petit" data-a="ajouterGage">Ajouter</button></div>
     <div class="discret">Idées :</div>
     <div class="puces-choix">${restantes.slice(0, 8).map(s => `<button class="puce-choix" data-a="suggestion" data-t="${esc(s)}">+ ${esc(s)}</button>`).join('')}</div>`;
 }
 
+/** Étapes communes « ta bête » puis « tes châtiments » (création et invitation). */
+function etapeBete(n, total, titreSuite) {
+  const b = E.b;
+  return `<div class="pile" style="gap:18px">${etapes(n, total)}
+      <h2 class="partie-nom">Ta mauvaise habitude</h2>
+      ${grilleHabitudes(b.habit, [])}
+      ${b.habit === 'autre' ? `<div class="champ"><label for="nomAutre">Nomme ta bête</label>
+        <input id="nomAutre" maxlength="24" placeholder="Le Grignotage" value="${esc(b.nomAutre)}"></div>` : ''}
+      <button class="btn corail large" data-a="etapeSuivante" ${b.habit && (b.habit !== 'autre' || b.nomAutre.trim()) ? '' : 'disabled'}>Suivant</button>
+      <button class="btn fantome" data-a="${titreSuite}">Je ne joue pas, je surveille les autres</button>
+    </div>`;
+}
+function etapeGages(n, total, action, libelle) {
+  const b = E.b;
+  return `<div class="pile" style="gap:16px">${etapes(n, total)}
+      <h2 class="partie-nom">Tes châtiments</h2>
+      <p class="discret" style="margin:0">Si tu craques, celui que le sort désigne pourra piocher ici s'il n'a pas d'idée. Au moins 3.</p>
+      ${editeurGages(b.gages)}
+      <button class="btn corail large" data-a="${action}" ${b.gages.length >= 3 ? '' : 'disabled'}>${libelle} (${b.gages.length}/3)</button>
+    </div>`;
+}
+
+function vueCreer() {
+  const b = E.b || (E.b = { nom: 'Les Potos', habit: null, nomAutre: '', gages: [] });
+  if (E.etape === 0) {
+    return `<div class="pile" style="gap:18px">${etapes(1, 3)}
+        <h2 class="partie-nom">Ta partie</h2>
+        <div class="champ"><label for="nomPartie">Nom de la partie</label>
+          <input id="nomPartie" maxlength="24" value="${esc(b.nom)}" autocomplete="off"></div>
+        <button class="btn corail large" data-a="etapeSuivante">Suivant</button>
+        <button class="btn fantome" data-a="annuler">Annuler</button>
+      </div>`;
+  }
+  if (E.etape === 1) return etapeBete(2, 3, 'creerSpectateur');
+  return etapeGages(3, 3, 'creerPartie', 'Créer la partie');
+}
+
+function vueRejoindre() {
+  const a = E.apercu;
+  if (!a) return `<div class="vide">Recherche de la partie…</div>`;
+  if (a.erreur) {
+    return `<div class="pile" style="gap:16px"><h2 class="partie-nom">Lien invalide</h2>
+      <p class="discret">${esc(a.erreur)}</p><button class="btn large" data-a="annuler">Retour</button></div>`;
+  }
+  E.b = E.b || { habit: null, nomAutre: '', gages: [] };
+  if (E.etape === 0) {
+    const conseilIOS = ios && !autonome() ? `<div class="carte-tache"><span class="etiquette">SUR IPHONE</span>
+        <p>Pour recevoir les notifications, rejoins depuis l'appli installée :</p>
+        <p>1. Touche <b>Copier le lien</b>. 2. <b>Partager</b> puis <b>« Sur l'écran d'accueil »</b>. 3. Ouvre l'appli et colle le lien.</p>
+        <button class="btn soleil" data-a="copierInvitation">Copier le lien</button></div>` : '';
+    return `<div class="pile" style="gap:16px">
+        <div class="sur-titre" style="color:var(--soleil)">INVITATION</div>
+        <h2 class="partie-nom">${esc(a.nom)}</h2>
+        <p class="discret" style="margin:0">${a.membres.length} ${a.membres.length > 1 ? 'joueurs' : 'joueur'} : ${a.membres.map(esc).join(', ')}.
+          ${a.demarree ? 'La partie a déjà commencé : ton année démarre dès que tu rejoins.' : 'La partie n\'a pas encore commencé.'}</p>
+        ${conseilIOS}
+        <button class="btn corail large" data-a="etapeSuivante">Rejoindre</button>
+        <button class="btn fantome" data-a="annuler">Non merci</button>
+      </div>`;
+  }
+  if (E.etape === 1) return etapeBete(1, 2, 'rejoindreSpectateur');
+  return etapeGages(2, 2, 'rejoindrePartie', 'Rejoindre');
+}
+
+function vueSalon() {
+  const createur = P.createur === L.joueur;
+  const n = Object.keys(P.membres).length;
+  const membres = Object.keys(P.membres).map(id => {
+    const d = P.defis.find(x => x.qui === id);
+    const h = d ? (HABITUDES[d.habit] || HABITUDES.autre) : null;
+    return `<div class="carte joueur simple">${avatar(id)}
+      <div><b>${esc(nom(id))}</b>${id === P.createur ? ' <span class="discret">· créateur</span>' : ''}
+      <div class="discret">${d ? `joue contre ${esc(d.nom)} ${h.e}` : 'spectateur'}</div></div></div>`;
+  }).join('');
+  return `<div class="pile" style="gap:16px">
+      <div class="sur-titre" style="color:var(--soleil)">SALLE D'ATTENTE</div>
+      <h2 class="partie-nom">${esc(P.nom)}</h2>
+      <button class="btn soleil large" data-a="inviter">Envoyer le lien d'invitation</button>
+      <p class="discret" style="margin:0">Le lien contient la clé qui chiffre vos photos. Envoie-le seulement aux joueurs.</p>
+      ${carteNotifs()}
+      <div class="titre-section" style="margin:6px 0 0">Dans la partie (${n})</div>
+      <div class="pile">${membres}</div>
+      ${createur
+        ? `<button class="btn corail large" data-a="go" style="font-family:var(--f-titre);font-size:26px;padding:18px" ${n < 2 ? 'disabled' : ''}>GO</button>
+           <p class="discret" style="margin:0;text-align:center">${n < 2 ? 'Il faut au moins une autre personne pour lancer.' : 'Tout le monde sera prévenu. L\'année commence.'}</p>`
+        : `<div class="carte" style="text-align:center">En attente du GO de <b>${esc(nom(P.createur))}</b>…</div>`}
+      <button class="btn fantome" data-a="hub">Mes parties</button>
+    </div>`;
+}
+
 /* ================= Rendu ================= */
+
+function modeCourant() {
+  if (!L.joueur) return 'accueil';
+  if (E.mode) return E.mode;
+  if (!P) return 'hub';
+  return P.debut ? 'jeu' : 'salon';
+}
 
 function render(anim = false) {
   const vue = $('#vue');
-  const pret = S.pret;
-  $('#entete').hidden = !pret;
-  $('#nav').hidden = !pret;
-  if (!pret) {
-    vue.innerHTML = vueAccueil();
-    vue.className = anim ? 'vue-entree' : '';
-    if (S.onb.etape === 4) faireRejoindre();
-    sauver();
-    return;
-  }
-  const j = Math.floor((maintenant() - S.partie.debut) / J);
-  $('#puce-jour').textContent = 'J+' + Math.max(0, j);
-  $('#puce-points').textContent = moi().points + ' pts';
-  document.querySelectorAll('.onglet').forEach(b => b.classList.toggle('actif', b.dataset.onglet === S.onglet));
+  const mode = modeCourant();
+  const jeu = mode === 'jeu';
+  $('#entete').hidden = !jeu;
+  $('#nav').hidden = !jeu;
   const scroll = vue.scrollTop;
-  vue.innerHTML = { fil: vueFil, partie: vuePartie, badges: vueBadges, moi: vueMoi }[S.onglet]();
+  if (!jeu) {
+    vue.innerHTML = { accueil: vueAccueil, hub: vueHub, creer: vueCreer, rejoindre: vueRejoindre, salon: vueSalon }[mode]();
+  } else {
+    const j = Math.floor((maintenant() - P.debut) / J);
+    $('#puce-jour').textContent = 'J+' + Math.max(0, j);
+    $('#puce-points').textContent = points(L.joueur) + ' pts';
+    document.querySelectorAll('.onglet').forEach(b => b.classList.toggle('actif', b.dataset.onglet === L.onglet));
+    vue.innerHTML = { fil: vueFil, partie: vuePartie, badges: vueBadges, moi: vueMoi }[L.onglet]();
+    animerPV();
+  }
   vue.className = anim ? 'vue-entree' : '';
   vue.scrollTop = anim ? 0 : scroll;
-  animerPV();
-  sauver();
+  if (P && (jeu || mode === 'salon')) chargerMediasVisibles();
 }
 
-/** Anime les barres de vie et fait sauter les dégâts au-dessus de la bête. */
 function animerPV() {
   requestAnimationFrame(() => requestAnimationFrame(() => {
     document.querySelectorAll('.barre > i[data-w]').forEach(i => { i.style.width = i.dataset.w + '%'; });
   }));
-  for (const d of S.defis) {
+  for (const d of P.defis) {
     const p = pv(d);
     const avant = PV_AFFICHE[d.id];
     PV_AFFICHE[d.id] = p;
@@ -772,104 +981,37 @@ function animerPV() {
 }
 
 function changerOnglet(o) {
-  if (S.onglet === o) { $('#vue').scrollTo({ top: 0, behavior: 'smooth' }); return; }
-  S.onglet = o;
+  if (L.onglet === o) { $('#vue').scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  L.onglet = o;
+  sauverLocal();
   son('tic');
   render(true);
 }
 
-/* ================= Badges et points ================= */
+/* ================= Ce qui vient d'arriver : animations ================= */
 
-const fileBadges = [];
-let affichageBadges = false;
-
-function gagnerPoints(n) {
-  moi().points = Math.max(0, moi().points + n);
-  const p = $('#puce-points');
-  if (p) { p.classList.remove('pop'); void p.offsetWidth; p.classList.add('pop'); }
-}
-
-function verifierBadges() {
-  const mes = mesDefis();
-  const serieMax = mes.reduce((m, d) => Math.max(m, enJeu(d) ? serie(d) : 0), 0);
-  const conds = {
-    go: mes.length > 0,
-    j1: serieMax >= 1, j7: serieMax >= 7, j30: serieMax >= 30, j100: serieMax >= 100,
-    j182: mes.some(d => jours(d) >= 182),
-    rip: mes.some(d => d.mort),
-    honnete: S.stats.aveux > 0, dette: S.stats.dettes > 0, bourreau: S.stats.bourreau > 0,
-    juge: S.stats.juge > 0, balance: S.stats.balance > 0,
-    phenix: mes.some(d => enJeu(d) && d.rechutes.length > 0 && serie(d) >= 7),
-    flair: S.stats.paris > 0, supporter: S.stats.reacs >= 10,
-    multi: mes.filter(enJeu).length >= 3, innocent: S.stats.innocent > 0,
-    riche: moi().points >= 500
-  };
-  for (const b of BADGES) {
-    if (S.badges[b.id] || !conds[b.id]) continue;
-    S.badges[b.id] = maintenant();
-    gagnerPoints(10);
-    evt('badge', { qui: 'moi', badge: b.id });
-    fileBadges.push(b);
+let fileAnim = Promise.resolve();
+function nouveautes(evts, ancien) {
+  const moi = L.joueur;
+  let bannieres = 0;
+  const lancement = evts.some(e => e.type === 'lancement');
+  for (const e of evts) {
+    if (e.type === 'lancement' || (e.type === 'go' && e.qui === moi && !lancement)) enFile(() => compteARebours());
+    else if (e.type === 'tirage' && (e.qui === moi || e.bourreau === moi)) {
+      const g = P.gages.find(x => x.id === e.gage);
+      if (g && g.statut === 'attente') enFile(() => tirage(e));
+    }
+    else if (e.type === 'badge' && e.qui === moi) enFile(() => montrerBadge(e.badge));
+    else if (e.type === 'mort' && e.qui === moi) enFile(() => celebrer(defi(e.defi)));
+    else if (e.qui !== moi && bannieres < 2 && !['badge', 'tirage'].includes(e.type) && document.visibilityState === 'visible') {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = texteEvt(e);
+      const texte = tmp.textContent.trim();
+      if (texte) { bannieres++; setTimeout(() => { banniere(P.nom, texte); son('pop'); vibrer('40,60,40'); }, bannieres * 900); }
+    }
   }
-  montrerBadges();
 }
-
-async function montrerBadges() {
-  if (affichageBadges || enSimulation) return;
-  affichageBadges = true;
-  while (fileBadges.length) {
-    const b = fileBadges.shift();
-    await new Promise(fin => {
-      const el = ouvrir(`<div class="sur-titre">BADGE DÉBLOQUÉ</div>
-        <div class="badge-geant">${medaille(b)}</div>
-        <h2>${esc(b.nom)}</h2><p>${esc(b.desc)}</p><p style="color:var(--soleil);font-weight:900">+10 points</p>
-        <button class="btn soleil" data-a="fermerCalque">Trop bien</button>`, { plein: true, onClose: fin });
-      el.dataset.badge = b.id;
-      son('badge'); vibrer('30,40,30,40,120'); confettis(120);
-    });
-  }
-  affichageBadges = false;
-  render();
-}
-
-/* ================= Le jeu ================= */
-
-function creerDefi(qui, habit, nomBete, gages) {
-  const d = { id: uid(), qui, habit, nom: nomBete || HABITUDES[habit].bete, gages: gages.slice(), debut: maintenant(), rechutes: [], mort: null, survit: false, paliers: {} };
-  S.defis.push(d);
-  return d;
-}
-
-async function lancerGO() {
-  const o = S.onb;
-  const nomPartie = (o.nomPartie || '').trim() || 'Les Potos';
-  S.membres = { moi: { id: 'moi', nom: o.pseudo.trim(), couleur: o.couleur, points: 100, bot: false } };
-  BOTS.slice(0, o.rejoints).forEach(b => { S.membres[b.id] = { id: b.id, nom: b.nom, couleur: b.couleur, bot: true }; });
-  S.partie = { nom: nomPartie, code: o.code || codeInvitation(), debut: maintenant() };
-  BOTS.slice(0, o.rejoints).forEach(b => creerDefi(b.id, b.habit, null, b.gages));
-  const d = creerDefi('moi', o.habit, o.habit === 'autre' ? o.nomAutre.trim() : null, o.gages);
-  await compteARebours();
-  S.pret = true;
-  S.onglet = 'fil';
-  S.defis.filter(x => x.qui !== 'moi').forEach(x => { const e = evt('go', { qui: x.qui, defi: x.id }); e.t -= 60000; });
-  const e = evt('go', { qui: 'moi', defi: d.id });
-  reactionsDesAmis(e, ['respect', 'force']);
-  render(true);
-  annonceEnvoyee(`${moi().nom} lance sa partie contre ${d.nom}`, 'Un an pour l\'abattre. Vous serez prévenus à chaque rechute.');
-  setTimeout(verifierBadges, 2600);
-}
-
-function codeInvitation() {
-  const a = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  return 'BH-' + Array.from({ length: 4 }, () => hasard(a.split(''))).join('');
-}
-
-/** Ce que tes amis reçoivent quand tu agis : on te montre la notification envoyée. */
-function annonceEnvoyee(titre, corps) {
-  const n = Object.keys(S.membres).length - 1;
-  banniere(titre, corps);
-  setTimeout(() => banniere(`Notification envoyée à ${n} ${n > 1 ? 'amis' : 'ami'}`, 'Ils viennent de la recevoir sur leur téléphone.'), 1300);
-}
+function enFile(f) { fileAnim = fileAnim.then(f).catch(() => {}); }
 
 async function compteARebours() {
   const el = ouvrir(`<div class="rebours" id="rb"></div><p id="rb-txt">Préviens tes proches…</p>`, { plein: true, fermable: false });
@@ -882,21 +1024,22 @@ async function compteARebours() {
   rb.className = 'rebours go'; rb.textContent = 'GO!'; void rb.offsetWidth; rb.className = 'rebours go anim';
   $('#rb-txt', el).textContent = 'La partie est lancée. 365 jours.';
   son('go'); vibrer('100,50,100,50,300'); confettis(180);
-  await attendre(1100);
+  await attendre(1300);
   fermerEl(el);
 }
 
-/** Roue du tirage au sort parmi les membres (sauf la victime). */
-async function tirage(victime, titre) {
-  const cands = Object.keys(S.membres).filter(id => id !== victime);
-  const elu = hasard(cands);
-  if (enSimulation) return elu;
+/** Roue du tirage : le serveur a déjà tiré, on rejoue le suspense. */
+async function tirage(e) {
+  const victime = e.qui, elu = e.bourreau;
+  const cands = Object.keys(P.membres).filter(id => id !== victime);
+  if (!cands.includes(elu)) return;
   const n = cands.length, R = 38;
   const avs = cands.map((id, i) => {
     const a = -Math.PI / 2 + i * 2 * Math.PI / n;
     const x = 50 + R * Math.cos(a), y = 50 + R * Math.sin(a);
     return avatar(id, '', `style="left:calc(${x}% - 31px);top:calc(${y}% - 31px)"`);
   }).join('');
+  const titre = victime === L.joueur ? 'Ton châtiment' : `Châtiment de ${nom(victime)}`;
   const el = ouvrir(`<div class="sur-titre">TIRAGE AU SORT</div><h2>${esc(titre)}</h2>
     <div class="roue">${avs}<div class="roue-centre" id="rc">?</div></div>
     <p id="tt">Qui va choisir le châtiment ?</p>`, { plein: true, fermable: false });
@@ -905,244 +1048,44 @@ async function tirage(victime, titre) {
   const tours = 3 * n + fin;
   let delai = 55;
   for (let k = 0; k <= tours; k++) {
-    els.forEach(e => e.classList.remove('vise'));
+    els.forEach(x => x.classList.remove('vise'));
     els[k % n].classList.add('vise');
     son('tic'); vibrer('12');
     await attendre(delai);
     delai = k > tours - 6 ? delai * 1.5 : delai * 1.05;
   }
   els[fin].classList.add('elu');
-  $('#rc', el).textContent = elu === 'moi' ? 'TOI' : nom(elu).toUpperCase();
-  $('#tt', el).innerHTML = elu === 'moi' ? '<b>C\'est toi qui choisis !</b>' : `<b>${esc(nom(elu))}</b> choisit le châtiment.`;
+  $('#rc', el).textContent = elu === L.joueur ? 'TOI' : nom(elu).toUpperCase();
+  $('#tt', el).innerHTML = elu === L.joueur ? '<b>C\'est toi qui choisis !</b>' : `<b>${esc(nom(elu))}</b> choisit le châtiment.`;
   son('badge'); vibrer('80,60,200');
-  await attendre(1900);
-  fermerEl(el);
-  return elu;
-}
-
-/** Une rechute est comptée : PV rendus à la bête, paris perdus, tirage du bourreau. */
-async function rechute(d, { media, apres, accusationMedia } = {}) {
-  d.rechutes.push(maintenant());
-  const e = evt('aveu', { qui: d.qui, defi: d.id, media: media || accusationMedia || null, apres: apres || null });
-  if (d.qui === 'moi') reactionsDesAmis(e, ['honte', 'mdr', 'force']);
-  for (const p of S.paris) {
-    if (p.defi === d.id && p.statut === 'en cours') {
-      p.statut = 'perdu';
-      evt('pari-perdu', { qui: d.qui, defi: d.id, mise: p.mise });
-    }
-  }
-  const titre = d.qui === 'moi' ? 'Ton châtiment' : `Châtiment de ${nom(d.qui)}`;
-  const bourreau = await tirage(d.qui, titre);
-  const g = { id: uid(), defi: d.id, victime: d.qui, bourreau, texte: null, statut: 'attente', echeance: maintenant() + DELAI_GAGE, preuve: null };
-  S.gages.push(g);
-  evt('tirage', { qui: d.qui, defi: d.id, bourreau, gage: g.id });
-  if (bourreau === 'moi') {
-    notifier('Le sort t\'a désigné', `Tu as 12 h pour choisir le châtiment de ${nom(d.qui)}.`);
-    if (!enSimulation) { render(); feuilleChoisir(g); }
-  } else if (enSimulation) {
-    botChoisit(g);
-  } else {
-    render();
-    setTimeout(() => { botChoisit(g); render(); }, 4500 + Math.random() * 2500);
-  }
-  return g;
-}
-
-function botChoisit(g) {
-  if (g.statut !== 'attente') return;
-  const d = defi(g.defi);
-  g.texte = Math.random() < 0.6 ? hasard(d.gages) : hasard(GAGES_INVENTES);
-  g.statut = 'choisi';
-  evt('gage', { qui: g.victime, defi: g.defi, bourreau: g.bourreau, gage: g.id });
-  if (g.victime === 'moi') notifier(`${nom(g.bourreau)} a choisi ton châtiment`, g.texte);
-  else if (!enSimulation) setTimeout(() => { botProuve(g); render(); }, 7000 + Math.random() * 4000);
-}
-
-function botProuve(g) {
-  if (g.statut !== 'choisi') return;
-  const v = S.membres[g.victime];
-  g.preuve = imageFictive(g.texte, v.couleur, '😤', 'PREUVE');
-  g.statut = 'prouve';
-  evt('preuve', { qui: g.victime, defi: g.defi, gage: g.id, media: g.preuve });
-  if (g.bourreau === 'moi') notifier(`${v.nom} a envoyé sa preuve`, 'À toi de juger si le gage est fait.');
-  else validerGage(g, true);
-}
-
-function validerGage(g, ok) {
-  if (g.statut !== 'prouve') return;
-  if (ok) {
-    g.statut = 'valide';
-    evt('valide', { qui: g.victime, defi: g.defi, bourreau: g.bourreau, gage: g.id });
-    if (g.victime === 'moi') { S.stats.dettes++; gagnerPoints(20); notifier(`${nom(g.bourreau)} valide ta preuve`, 'Dette payée. +20 points.'); }
-  } else {
-    g.statut = 'choisi';
-    evt('refuse', { qui: g.victime, defi: g.defi, bourreau: g.bourreau, gage: g.id });
-    if (g.victime === 'moi') notifier(`${nom(g.bourreau)} refuse ta preuve`, 'Pas convaincant. Refais ton gage.');
-    else if (!enSimulation) setTimeout(() => { botProuve(g); render(); }, 8000);
-  }
-}
-
-/* ---------- Simulation du temps (mode démo) ---------- */
-
-async function avancer(n) {
-  enSimulation = true;
-  notifsSim = [];
-  for (let i = 0; i < n; i++) {
-    S.decalage += J;
-    for (const d of S.defis.filter(x => x.qui !== 'moi' && enJeu(x))) {
-      if (Math.random() < 0.03) await rechute(d);
-    }
-    const mien = mesDefis().find(enJeu);
-    if (mien && Math.random() < 0.015 && !S.accusations.some(a => a.statut === 'ouverte')) botAccuse(mien);
-    for (const g of S.gages) {
-      if (g.statut === 'attente' && g.bourreau !== 'moi') botChoisit(g);
-      else if (g.statut === 'attente' && g.bourreau === 'moi' && g.echeance < maintenant()) {
-        g.texte = hasard(defi(g.defi).gages);
-        g.statut = 'choisi';
-        evt('delai', { qui: g.victime, defi: g.defi, bourreau: 'moi', gage: g.id });
-      } else if (g.statut === 'choisi' && g.victime !== 'moi' && Math.random() < 0.7) botProuve(g);
-      else if (g.statut === 'prouve' && g.victime === 'moi') validerGage(g, true);
-    }
-    for (const p of S.paris) {
-      if (p.statut === 'en cours' && p.fin <= maintenant()) {
-        p.statut = 'gagne';
-        const gain = p.mise * 2;
-        gagnerPoints(gain);
-        S.stats.paris++;
-        evt('pari-gagne', { qui: defi(p.defi).qui, defi: p.defi, gain });
-      }
-    }
-    for (const d of S.defis) {
-      if (!enJeu(d)) continue;
-      if (d.qui === 'moi' && serie(d) > 0) gagnerPoints(2);
-      if (pv(d) <= 0) {
-        d.mort = maintenant();
-        evt('mort', { qui: d.qui, defi: d.id, n: jours(d) });
-        if (d.qui === 'moi') { gagnerPoints(100); fileCelebration.push(d); }
-        else notifier(`${nom(d.qui)} a abattu ${d.nom}`, 'Sa bête est morte. Respect.');
-      } else if (jours(d) >= DUREE) {
-        d.survit = true;
-        evt('survit', { qui: d.qui, defi: d.id });
-      } else if (d.qui !== 'moi') {
-        const s = serie(d);
-        for (const p of [30, 100, 200]) {
-          if (s >= p && !d.paliers[p]) { d.paliers[p] = 1; evt('palier', { qui: d.qui, defi: d.id, n: p }); }
-        }
-      }
-    }
-  }
-  enSimulation = false;
-  const notifs = notifsSim;
-  notifsSim = [];
-  render();
-  notifs.slice(0, 3).forEach(([t, c], i) => setTimeout(() => notifier(t, c), i * 900));
-  if (notifs.length > 3) setTimeout(() => banniere(`Et ${notifs.length - 3} autres notifications`, 'Regarde le fil.'), 2900);
-  verifierBadges();
-  celebrer();
-}
-
-const fileCelebration = [];
-async function celebrer() {
-  while (fileCelebration.length) {
-    const d = fileCelebration.shift();
-    await new Promise(fin => {
-      ouvrir(`<div class="sur-titre">VICTOIRE</div>${beteSVG(d).replace('class="bete-svg"', 'class="bete-svg" style="width:200px;height:200px"')}
-        <h2>${esc(d.nom)} est morte</h2><p>Tu l'as abattue en ${Math.floor((d.mort - d.debut) / J)} jours. Toute la partie est prévenue.</p>
-        <p style="color:var(--soleil);font-weight:900">+100 points</p>
-        <button class="btn soleil" data-a="fermerCalque">Repose en paix</button>`, { plein: true, onClose: fin });
-      son('go'); vibrer('100,60,100,60,400'); confettis(220);
-    });
-  }
-}
-
-function botAccuse(d) {
-  const accusateur = hasard(Object.keys(S.membres).filter(id => id !== 'moi'));
-  const media = imageFictive('Je t\'ai vu…', S.membres[accusateur].couleur, HABITUDES[d.habit].e, 'PRIS !');
-  const a = { id: uid(), qui: accusateur, cible: 'moi', defi: d.id, media, statut: 'ouverte' };
-  S.accusations.push(a);
-  evt('accuse', { qui: accusateur, cible: 'moi', defi: d.id, media });
-  notifier(`${nom(accusateur)} t'accuse`, 'Preuve à l\'appui. Avoue ou conteste.');
-}
-
-/** Vote des autres membres quand une accusation est contestée. */
-async function vote(accuse, accusateur) {
-  const votants = Object.keys(S.membres).filter(id => id !== accuse);
-  const votes = votants.map(id => id === accusateur || id === 'moi' ? true : Math.random() < 0.55);
-  const coupable = votes.filter(Boolean).length > votants.length / 2;
-  if (enSimulation) return coupable;
-  const el = ouvrir(`<div class="sur-titre">VOTE DE LA PARTIE</div><h2>${esc(nom(accuse))} a-t-il craqué ?</h2>
-    <div class="pile" style="width:100%;max-width:320px">${votants.map((id, i) => `<div class="carte" style="display:flex;align-items:center;gap:10px">
-      ${avatar(id)}<b style="flex:1;text-align:left">${esc(nom(id))}</b><span class="vote" data-i="${i}" style="font-family:var(--f-titre)">…</span></div>`).join('')}</div>
-    <p id="verdict"> </p>`, { plein: true, fermable: false });
-  for (let i = 0; i < votants.length; i++) {
-    await attendre(700);
-    const v = el.querySelector(`.vote[data-i="${i}"]`);
-    v.textContent = votes[i] ? 'COUPABLE' : 'INNOCENT';
-    v.style.color = votes[i] ? 'var(--corail)' : 'var(--menthe)';
-    son('tic'); vibrer('20');
-  }
-  await attendre(600);
-  $('#verdict', el).innerHTML = `<span class="tampon" style="display:inline-block;font-size:34px;${coupable ? '' : 'color:var(--menthe);border-color:var(--menthe)'}">${coupable ? 'COUPABLE' : 'INNOCENT'}</span>`;
-  son(coupable ? 'honte' : 'badge'); vibrer('80,60,200');
   await attendre(2000);
   fermerEl(el);
-  return coupable;
-}
-
-/* ================= Feuilles d'action ================= */
-
-function zoneDepot(id, texte) {
-  return `<label class="depot" for="${id}"><span class="e">📸</span>${esc(texte)}<span class="discret" style="font-weight:700">Photo ou vidéo de 15 s maximum</span></label>
-    <input type="file" id="${id}" accept="image/*,video/*" hidden>
-    <div class="apercu-preuve" id="${id}-apercu" hidden></div>`;
-}
-
-function brancherDepot(el, id, quandPret) {
-  const input = $('#' + id, el);
-  input.addEventListener('change', async () => {
-    const f = input.files && input.files[0];
-    if (!f) return;
-    const m = await traiterFichier(f);
-    if (!m) { banniere('Fichier illisible', 'Essaie une autre photo ou vidéo.'); return; }
-    const ap = $('#' + id + '-apercu', el);
-    ap.hidden = false;
-    ap.innerHTML = m.video && MEDIAS[m.id]
-      ? `<video src="${MEDIAS[m.id]}" controls playsinline autoplay muted loop></video>`
-      : `<img src="${m.src}" alt="Aperçu">`;
-    el.querySelector('label.depot').innerHTML = '<span class="e">🔁</span>Changer';
-    quandPret(m);
-  });
-}
-
-function feuilleCraque() {
-  const vivants = mesDefis().filter(enJeu);
-  if (!vivants.length) {
-    ouvrir(`<h2>Rien à avouer</h2><p class="discret">Tu n'as aucun défi en cours. Lance-en un depuis l'onglet Moi.</p>
-      <button class="btn large" data-a="fermerCalque">OK</button>`);
-    return;
+  if (elu === L.joueur) {
+    const g = P.gages.find(x => x.id === e.gage);
+    if (g && g.statut === 'attente') feuilleChoisir(g);
   }
-  let choix = vivants[0].id, media = null;
-  const el = ouvrir(`<h2>Tu as craqué ?</h2>
-    <p class="discret" style="margin:0">Balance-toi. Toute la partie sera prévenue et le sort désignera ton bourreau.</p>
-    ${vivants.length > 1 ? `<div class="puces-choix" id="choixDefi">${vivants.map(d => `<button class="puce-choix" data-d="${d.id}">${HABITUDES[d.habit].e} ${esc(d.nom)}</button>`).join('')}</div>` : ''}
-    ${zoneDepot('preuveAveu', 'Prends-toi en flagrant délit')}
-    <button class="btn corail large" id="envoyerAveu" disabled>Je me balance</button>`);
-  const marquer = () => el.querySelectorAll('#choixDefi .puce-choix').forEach(b => {
-    b.style.borderColor = b.dataset.d === choix ? 'var(--corail)' : ''; b.style.borderStyle = b.dataset.d === choix ? 'solid' : '';
+}
+
+async function montrerBadge(id) {
+  const b = BADGES.find(x => x.id === id);
+  if (!b) return;
+  await new Promise(fin => {
+    ouvrir(`<div class="sur-titre">BADGE DÉBLOQUÉ</div>
+      <div class="badge-geant">${medaille(b)}</div>
+      <h2>${esc(b.nom)}</h2><p>${esc(b.desc)}</p><p style="color:var(--soleil);font-weight:900">+10 points</p>
+      <button class="btn soleil" data-a="fermerCalque">Trop bien</button>`, { plein: true, onClose: fin });
+    son('badge'); vibrer('30,40,30,40,120'); confettis(120);
   });
-  marquer();
-  el.querySelectorAll('#choixDefi .puce-choix').forEach(b => b.addEventListener('click', () => { choix = b.dataset.d; marquer(); }));
-  brancherDepot(el, 'preuveAveu', m => { media = m; $('#envoyerAveu', el).disabled = false; });
-  $('#envoyerAveu', el).addEventListener('click', async () => {
-    fermerEl(el);
-    const d = defi(choix);
-    await scenesHonte(d);
-    S.stats.aveux++;
-    annonceEnvoyee(`${moi().nom} a craqué ${HABITUDES[d.habit].e}`, `${d.nom} reprend des forces. Regarde la preuve.`);
-    await attendre(600);
-    await rechute(d, { media });
-    render();
-    verifierBadges();
+}
+
+async function celebrer(d) {
+  if (!d) return;
+  await new Promise(fin => {
+    ouvrir(`<div class="sur-titre">VICTOIRE</div>${beteSVG(d).replace('class="bete-svg"', 'class="bete-svg" style="width:200px;height:200px"')}
+      <h2>${esc(d.nom)} est morte</h2><p>Tu l'as abattue en ${Math.floor((d.mort - d.debut) / J)} jours. Toute la partie est prévenue.</p>
+      <p style="color:var(--soleil);font-weight:900">+100 points</p>
+      <button class="btn soleil" data-a="fermerCalque">Repose en paix</button>`, { plein: true, onClose: fin });
+    son('go'); vibrer('100,60,100,60,400'); confettis(220);
   });
 }
 
@@ -1152,9 +1095,8 @@ async function scenesHonte(d) {
   document.body.appendChild(flash);
   setTimeout(() => flash.remove(), 800);
   son('honte'); vibrer('300,100,300');
-  const avant = beteSVG(d);
   const el = ouvrir(`<div class="tampon">HONTE</div>
-    <div class="bete-carte grande" style="background:transparent;border:0">${avant}</div>
+    <div class="bete-carte grande" style="background:transparent;border:0">${beteSVG(d)}</div>
     <h2>${esc(d.nom)} reprend des forces</h2><p>+${PV_RECHUTE} points de vie. Ta série repart de zéro.</p>`, { plein: true, fermable: false });
   await attendre(900);
   const svg = el.querySelector('.bete-svg');
@@ -1167,14 +1109,78 @@ async function scenesHonte(d) {
   fermerEl(el);
 }
 
+/* ================= Feuilles d'action ================= */
+
+function zoneDepot(id, texte) {
+  return `<label class="depot" for="${id}"><span class="e">📸</span>${esc(texte)}<span class="discret" style="font-weight:700">Photo, ou vidéo de 15 s maximum</span></label>
+    <input type="file" id="${id}" accept="image/*,video/*" hidden>
+    <div class="apercu-preuve" id="${id}-apercu" hidden></div>`;
+}
+
+function brancherDepot(el, id, quandPret) {
+  const input = $('#' + id, el);
+  input.addEventListener('change', async () => {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    const m = await preparerFichier(f);
+    if (m.erreur) { banniere('Fichier refusé', m.erreur); return; }
+    const ap = $('#' + id + '-apercu', el);
+    ap.hidden = false;
+    ap.innerHTML = m.video
+      ? `<video src="${m.url}" controls playsinline autoplay muted loop></video>`
+      : `<img src="${m.url}" alt="Aperçu">`;
+    el.querySelector('label.depot').innerHTML = '<span class="e">🔁</span>Changer';
+    quandPret(m);
+  });
+}
+
+/** Chiffre puis envoie le média avec l'action. */
+async function envoyerAvecMedia(a, params, media, texte) {
+  let m;
+  const fin = attente('Chiffrement…');
+  try { m = await chiffrer(media); }
+  catch (err) { fin(); banniere('Chiffrement impossible', err.message); return false; }
+  fin();
+  const mo = (media.blob.size / 1048576).toFixed(1);
+  return jouer(a, Object.assign({ media: m }, params), texte + (media.video ? ` (${mo} Mo)` : ''));
+}
+
+function feuilleCraque() {
+  if (!P || !P.debut) { banniere('Pas encore', 'La partie n\'a pas commencé.'); return; }
+  const vivants = mesDefis().filter(enJeu);
+  if (!vivants.length) {
+    ouvrir(`<h2>Rien à avouer</h2><p class="discret">Tu n'as aucun défi en cours. Lance-en un depuis l'onglet Moi.</p>
+      <button class="btn large" data-a="fermerCalque">OK</button>`);
+    return;
+  }
+  let choix = vivants[0].id, media = null;
+  const el = ouvrir(`<h2>Tu as craqué ?</h2>
+    <p class="discret" style="margin:0">Balance-toi. Toute la partie sera prévenue et le sort désignera ton bourreau. La photo est effacée au bout de 24 h.</p>
+    ${vivants.length > 1 ? `<div class="puces-choix" id="choixDefi">${vivants.map(d => `<button class="puce-choix" data-d="${d.id}">${(HABITUDES[d.habit] || HABITUDES.autre).e} ${esc(d.nom)}</button>`).join('')}</div>` : ''}
+    ${zoneDepot('preuveAveu', 'Prends-toi en flagrant délit')}
+    <button class="btn corail large" id="envoyerAveu" disabled>Je me balance</button>`);
+  const marquer = () => el.querySelectorAll('#choixDefi .puce-choix').forEach(b => {
+    b.style.borderColor = b.dataset.d === choix ? 'var(--corail)' : ''; b.style.borderStyle = b.dataset.d === choix ? 'solid' : '';
+  });
+  marquer();
+  el.querySelectorAll('#choixDefi .puce-choix').forEach(b => b.addEventListener('click', () => { choix = b.dataset.d; marquer(); }));
+  brancherDepot(el, 'preuveAveu', m => { media = m; $('#envoyerAveu', el).disabled = false; });
+  $('#envoyerAveu', el).addEventListener('click', async () => {
+    fermerEl(el);
+    const d = defi(choix);
+    await scenesHonte(d);
+    await envoyerAvecMedia('craquer', { defi: d.id }, media, 'Envoi chiffré à la partie…');
+  });
+}
+
 function feuilleChoisir(g) {
   const d = defi(g.defi);
   let texte = null;
   const el = ouvrir(`<h2>Châtiment de ${esc(nom(g.victime))}</h2>
-    <span class="minuteur">Il te reste ${resteTemps(g.echeance)}. Après, le hasard choisira dans sa liste.</span>
-    <div class="discret">Sa liste :</div>
+    <span class="minuteur" data-ech="${g.echeance}">Il te reste ${resteTemps(g.echeance)}</span>
+    <div class="discret">Après, le hasard choisira dans sa liste :</div>
     <div class="liste-gages">${d.gages.map(t => `<button class="gage-ligne" data-t="${esc(t)}">${esc(t)}</button>`).join('')}</div>
-    <div class="champ"><label for="gageInvente">Ou invente le tien</label><input id="gageInvente" maxlength="80" placeholder="Ex : chanter du Céline Dion au bureau"></div>
+    <div class="champ"><label for="gageInvente">Ou invente le tien</label><input id="gageInvente" maxlength="120" placeholder="Ex : chanter du Céline Dion au bureau"></div>
     <button class="btn soleil large" id="validerChoix" disabled>Infliger ce châtiment</button>`);
   const maj = () => {
     el.querySelectorAll('.gage-ligne').forEach(b => b.classList.toggle('choisi', b.dataset.t === texte));
@@ -1182,18 +1188,9 @@ function feuilleChoisir(g) {
   };
   el.querySelectorAll('.gage-ligne').forEach(b => b.addEventListener('click', () => { texte = b.dataset.t; $('#gageInvente', el).value = ''; son('tic'); maj(); }));
   $('#gageInvente', el).addEventListener('input', e => { texte = e.target.value.trim() || null; maj(); });
-  $('#validerChoix', el).addEventListener('click', () => {
-    if (g.statut !== 'attente') { fermerEl(el); return; }
-    g.texte = texte; g.statut = 'choisi';
-    S.stats.bourreau++;
-    const e = evt('gage', { qui: g.victime, defi: g.defi, bourreau: 'moi', gage: g.id });
-    reactionsDesAmis(e, ['mdr', 'respect']);
+  $('#validerChoix', el).addEventListener('click', async () => {
     fermerEl(el);
-    annonceEnvoyee(`${moi().nom} a choisi le châtiment de ${nom(g.victime)}`, texte);
-    son('badge'); vibrer('40,40,120');
-    render();
-    verifierBadges();
-    setTimeout(() => { botProuve(g); render(); }, 6000 + Math.random() * 3000);
+    if (await jouer('choisir', { gage: g.id, texte }, 'Envoi du châtiment…')) { son('badge'); vibrer('40,40,120'); }
   });
 }
 
@@ -1201,33 +1198,26 @@ function feuilleProuver(g) {
   let media = null;
   const el = ouvrir(`<h2>Prouve-le</h2><div class="evt-gage">${esc(g.texte)}</div>
     ${zoneDepot('preuveGage', 'Montre que tu l\'as fait')}
-    <button class="btn corail large" id="envoyerPreuve" disabled>Envoyer à ${esc(nom(g.bourreau))}</button>`);
+    <p class="discret" style="margin:0">La preuve est effacée dès qu'elle est jugée.</p>
+    <button class="btn corail large" id="envoyerPreuve" disabled>Envoyer${g.bourreau ? ' à ' + esc(nom(g.bourreau)) : ''}</button>`);
   brancherDepot(el, 'preuveGage', m => { media = m; $('#envoyerPreuve', el).disabled = false; });
-  $('#envoyerPreuve', el).addEventListener('click', () => {
-    g.preuve = media; g.statut = 'prouve';
-    const e = evt('preuve', { qui: 'moi', defi: g.defi, gage: g.id, media });
-    reactionsDesAmis(e, ['respect', 'mdr']);
+  $('#envoyerPreuve', el).addEventListener('click', async () => {
     fermerEl(el);
-    annonceEnvoyee('Preuve envoyée', `${nom(g.bourreau)} va juger si ton gage est fait.`);
-    render();
-    setTimeout(() => { validerGage(g, Math.random() < 0.88); render(); verifierBadges(); }, 4500 + Math.random() * 2000);
+    await envoyerAvecMedia('prouver', { gage: g.id }, media, 'Envoi chiffré de la preuve…');
   });
 }
 
 function feuilleJuger(g) {
   const el = ouvrir(`<h2>Gage de ${esc(nom(g.victime))}</h2><div class="evt-gage">${esc(g.texte)}</div>
     ${mediaHTML(g.preuve)}
+    <p class="discret" style="margin:0">Quelle que soit ta réponse, la preuve est effacée.</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <button class="btn fantome" id="refuser">À refaire</button>
       <button class="btn menthe" id="valider">Validé</button></div>`);
-  const fin = ok => {
-    S.stats.juge++;
-    validerGage(g, ok);
+  chargerMediasVisibles();
+  const fin = async ok => {
     fermerEl(el);
-    annonceEnvoyee(ok ? 'Preuve validée' : 'Preuve refusée', ok ? `${nom(g.victime)} a payé sa dette.` : `${nom(g.victime)} doit refaire son gage.`);
-    if (ok) { son('badge'); confettis(70); }
-    render();
-    verifierBadges();
+    if (await jouer('juger', { gage: g.id, ok }, ok ? 'Validation…' : 'Refus…') && ok) { son('badge'); confettis(70); }
   };
   $('#valider', el).addEventListener('click', () => fin(true));
   $('#refuser', el).addEventListener('click', () => fin(false));
@@ -1236,95 +1226,68 @@ function feuilleJuger(g) {
 function feuilleRepondre(a) {
   const d = defi(a.defi);
   const el = ouvrir(`<h2>${esc(nom(a.qui))} t'accuse</h2>
-    <p class="discret" style="margin:0">D'après ${esc(nom(a.qui))}, tu as craqué sur ${esc(HABITUDES[d.habit].nom.toLowerCase())}.</p>
+    <p class="discret" style="margin:0">D'après ${esc(nom(a.qui))}, tu as craqué sur ${esc((HABITUDES[d.habit] || HABITUDES.autre).nom.toLowerCase())}.
+      Si tu contestes, la partie vote.</p>
     ${mediaHTML(a.media)}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <button class="btn corail" id="avouer">J'avoue</button>
       <button class="btn fantome" id="contester">Je conteste</button></div>`);
+  chargerMediasVisibles();
   $('#avouer', el).addEventListener('click', async () => {
-    a.statut = 'avoue';
     fermerEl(el);
     await scenesHonte(d);
-    await rechute(d, { apres: a.qui, accusationMedia: a.media });
-    render(); verifierBadges();
+    await jouer('repondre', { accusation: a.id, avoue: true }, 'Envoi…');
   });
   $('#contester', el).addEventListener('click', async () => {
     fermerEl(el);
-    evt('conteste', { qui: 'moi', defi: d.id });
-    render();
-    const coupable = await vote('moi', a.qui);
-    a.statut = coupable ? 'coupable' : 'innocent';
-    if (coupable) {
-      evt('coupable', { qui: 'moi', defi: d.id });
-      await scenesHonte(d);
-      await rechute(d, { apres: a.qui, accusationMedia: a.media });
-    } else {
-      S.stats.innocent++;
-      evt('innocent', { qui: 'moi', defi: d.id });
-    }
-    render(); verifierBadges();
+    await jouer('repondre', { accusation: a.id, avoue: false }, 'La partie va voter…');
   });
 }
 
+function feuilleVoter(a) {
+  const el = ouvrir(`<h2>${esc(nom(a.cible))} a-t-il craqué ?</h2>
+    <p class="discret" style="margin:0">${esc(nom(a.qui))} l'accuse, ${esc(nom(a.cible))} conteste. À toi de trancher.</p>
+    ${mediaHTML(a.media)}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <button class="btn menthe" id="innocent">Innocent</button>
+      <button class="btn corail" id="coupable">Coupable</button></div>`);
+  chargerMediasVisibles();
+  const voter = async coupable => {
+    fermerEl(el);
+    if (await jouer('voter', { accusation: a.id, coupable }, 'Vote…')) banniere('A voté', coupable ? 'Coupable.' : 'Innocent.');
+  };
+  $('#innocent', el).addEventListener('click', () => voter(false));
+  $('#coupable', el).addEventListener('click', () => voter(true));
+}
+
 function feuilleDenoncer(id) {
-  const d = S.defis.find(x => x.qui === id && enJeu(x));
+  const d = P.defis.find(x => x.qui === id && enJeu(x));
   if (!d) return;
   let media = null;
   const el = ouvrir(`<h2>Dénoncer ${esc(nom(id))}</h2>
-    <p class="discret" style="margin:0">Tu l'as vu craquer sur ${esc(HABITUDES[d.habit].nom.toLowerCase())} ? Il faut une preuve. ${esc(nom(id))} pourra avouer ou contester devant la partie.</p>
+    <p class="discret" style="margin:0">Tu l'as vu craquer sur ${esc((HABITUDES[d.habit] || HABITUDES.autre).nom.toLowerCase())} ? Il faut une preuve.
+      ${esc(nom(id))} pourra avouer ou contester devant la partie.</p>
     ${zoneDepot('preuveDenonce', 'Ta preuve')}
     <button class="btn corail large" id="envoyerDenonce" disabled>Balancer ${esc(nom(id))}</button>`);
   brancherDepot(el, 'preuveDenonce', m => { media = m; $('#envoyerDenonce', el).disabled = false; });
   $('#envoyerDenonce', el).addEventListener('click', async () => {
     fermerEl(el);
-    const a = { id: uid(), qui: 'moi', cible: id, defi: d.id, media, statut: 'ouverte' };
-    S.accusations.push(a);
-    evt('accuse', { qui: 'moi', cible: id, defi: d.id, media });
-    annonceEnvoyee(`${moi().nom} accuse ${nom(id)}`, 'Preuve envoyée à toute la partie.');
-    S.onglet = 'fil';
-    render(true);
-    await attendre(3500);
-    if (Math.random() < 0.7) {
-      a.statut = 'avoue';
-      S.stats.balance++;
-      notifier(`${nom(id)} avoue`, `Bien vu. ${d.nom} reprend ${PV_RECHUTE} PV.`);
-      await attendre(800);
-      await rechute(d, { apres: 'moi', accusationMedia: media });
-    } else {
-      notifier(`${nom(id)} conteste`, 'La partie va voter.');
-      evt('conteste', { qui: id, defi: d.id });
-      render();
-      await attendre(900);
-      const coupable = await vote(id, 'moi');
-      a.statut = coupable ? 'coupable' : 'innocent';
-      if (coupable) {
-        S.stats.balance++;
-        evt('coupable', { qui: id, defi: d.id });
-        await rechute(d, { apres: 'moi', accusationMedia: media });
-      } else {
-        evt('innocent', { qui: id, defi: d.id });
-      }
-    }
-    render(); verifierBadges();
+    if (await envoyerAvecMedia('denoncer', { defi: d.id }, media, 'Envoi chiffré de la preuve…')) { L.onglet = 'fil'; render(true); }
   });
 }
 
 function feuillePari(defiId) {
   const d = defi(defiId);
-  const pts = moi().points;
+  const pts = points(L.joueur);
   const el = ouvrir(`<h2>Parier sur ${esc(nom(d.qui))}</h2>
     <p class="discret" style="margin:0">${esc(nom(d.qui))} tient encore 7 jours contre ${esc(d.nom)} ? Si oui, tu doubles ta mise. Points virtuels uniquement.</p>
     <div class="demo-boutons">${[10, 25, 50].map(m => `<button class="btn soleil" data-m="${m}" ${m > pts ? 'disabled' : ''}>${m} pts</button>`).join('')}</div>
     <div class="discret">Tu as ${pts} points.</div>`);
-  el.querySelectorAll('[data-m]').forEach(b => b.addEventListener('click', () => {
-    const mise = Number(b.dataset.m);
-    gagnerPoints(-mise);
-    S.paris.push({ id: uid(), defi: d.id, mise, fin: maintenant() + 7 * J, statut: 'en cours' });
-    evt('pari', { qui: d.qui, defi: d.id, mise });
+  el.querySelectorAll('[data-m]').forEach(b => b.addEventListener('click', async () => {
     fermerEl(el);
-    son('pop'); vibrer('30');
-    banniere('Pari enregistré', `${mise} pts sur ${nom(d.qui)}. Réponse dans 7 jours.`);
-    render();
+    if (await jouer('parier', { defi: d.id, mise: Number(b.dataset.m) }, 'Pari…')) {
+      son('pop'); banniere('Pari enregistré', `${b.dataset.m} pts sur ${nom(d.qui)}. Réponse dans 7 jours.`);
+    }
   }));
 }
 
@@ -1337,7 +1300,7 @@ function feuilleAjouterDefi() {
     zone.innerHTML = `<h2>Nouveau défi</h2>${grilleHabitudes(a.habit, exclues)}
       ${a.habit === 'autre' ? `<div class="champ"><label for="ajoutAutre">Nomme ta bête</label><input id="ajoutAutre" maxlength="24" value="${esc(a.nomAutre)}"></div>` : ''}
       <button class="btn corail large" id="a1" ${a.habit && (a.habit !== 'autre' || a.nomAutre.trim()) ? '' : 'disabled'}>Suivant</button>`;
-    zone.querySelectorAll('.habitude').forEach(b => b.addEventListener('click', () => { a.habit = b.dataset.k; son('tic'); etape1(); }));
+    zone.querySelectorAll('.habitude').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); a.habit = b.dataset.k; son('tic'); etape1(); }));
     const ia = $('#ajoutAutre', zone);
     if (ia) ia.addEventListener('input', () => { a.nomAutre = ia.value; $('#a1', zone).disabled = !ia.value.trim(); });
     $('#a1', zone).addEventListener('click', etape2);
@@ -1352,106 +1315,246 @@ function feuilleAjouterDefi() {
     $('#nouveauGage', zone).addEventListener('keydown', e => { if (e.key === 'Enter') ajouter(e); });
     $('#a2', zone).addEventListener('click', async () => {
       fermerEl(el);
-      const d = creerDefi('moi', a.habit, a.habit === 'autre' ? a.nomAutre.trim() : null, a.gages);
-      await compteARebours();
-      const e = evt('go', { qui: 'moi', defi: d.id });
-      reactionsDesAmis(e, ['respect', 'force']);
-      S.onglet = 'fil';
-      render(true);
-      annonceEnvoyee(`${moi().nom} lance un nouveau défi contre ${d.nom}`, 'Un an pour l\'abattre.');
-      setTimeout(verifierBadges, 2600);
+      const def = { habit: a.habit, nom: a.habit === 'autre' ? a.nomAutre.trim() : '', gages: a.gages };
+      if (await jouer('ajouterDefi', { defi: def }, 'Création du défi…')) { L.onglet = 'fil'; render(true); }
     });
   };
   etape1();
 }
 
+/* ================= Parties : créer, rejoindre, inviter ================= */
+
+function lienInvitation() {
+  const ref = L.parties.find(x => x.id === P.id);
+  return SITE + '#j=' + P.code + '.' + (ref ? ref.cle : '');
+}
+
+function lireLien(texte) {
+  const m = String(texte || '').match(/(BH-[A-Z0-9]{5})\.([A-Za-z0-9_-]{43})/);
+  return m ? { code: m[1], cle: m[2] } : null;
+}
+
+async function ouvrirInvitation(inv) {
+  L.invitation = inv;
+  sauverLocal();
+  const deja = L.parties.find(x => x.cle === inv.cle);
+  if (deja) { L.invitation = null; sauverLocal(); await ouvrirPartie(deja.id); return; }
+  E = { mode: 'rejoindre', etape: 0, b: null, apercu: null };
+  render(true);
+  try { E.apercu = await appel('apercu', { code: inv.code }); }
+  catch (err) { E.apercu = { erreur: err.message }; }
+  if (E.mode === 'rejoindre') render();
+}
+
+async function ouvrirPartie(id) {
+  const memo = partieMemorisee(id);
+  E = { mode: null, etape: 0, b: null, apercu: null };
+  if (memo) { P = memo; L.courante = id; sauverLocal(); render(true); }
+  else {
+    P = null;
+    const fin = attente('Chargement de la partie…');
+    try {
+      const d = await appel('etat', { partie: id });
+      if (d.etat) majEtat(d.etat);
+    } catch (err) { banniere('Partie inaccessible', err.message); if (/introuvable|ne fais pas partie/.test(err.message)) oublierPartie(id); }
+    finally { fin(); }
+    return;
+  }
+  rafraichir();
+}
+
+function oublierPartie(id) {
+  L.parties = L.parties.filter(x => x.id !== id);
+  if (L.courante === id) L.courante = null;
+  try { localStorage.removeItem('bhcd-p:' + id); } catch (e) { /* rien */ }
+  if (P && P.id === id) P = null;
+  sauverLocal();
+  render(true);
+}
+
+function defiBrouillon() {
+  const b = E.b;
+  if (!b || !b.habit) return null;
+  return { habit: b.habit, nom: b.habit === 'autre' ? b.nomAutre.trim() : '', gages: b.gages };
+}
+
+async function creerPartie(spectateur) {
+  const b = E.b;
+  const cle = nouvelleCle();
+  const fin = attente('Création de la partie…');
+  try {
+    const d = await appel('creer', { nom: b.nom, defi: spectateur ? null : defiBrouillon(), partie: undefined });
+    L.parties.push({ id: d.etat.id, nom: d.etat.nom, cle });
+    E = { mode: null, etape: 0, b: null, apercu: null };
+    majEtat(d.etat);
+    son('go'); confettis(80);
+  } catch (err) { banniere('Création impossible', err.message); }
+  finally { fin(); }
+}
+
+async function rejoindrePartie(spectateur) {
+  const inv = L.invitation;
+  if (!inv) return;
+  const fin = attente('Tu rejoins la partie…');
+  try {
+    const d = await appel('rejoindre', { code: inv.code, defi: spectateur ? null : defiBrouillon(), partie: undefined });
+    if (!L.parties.some(x => x.id === d.etat.id)) L.parties.push({ id: d.etat.id, nom: d.etat.nom, cle: inv.cle });
+    L.invitation = null;
+    E = { mode: null, etape: 0, b: null, apercu: null };
+    P = null;
+    majEtat(d.etat);
+    son('go'); confettis(100);
+  } catch (err) { banniere('Impossible de rejoindre', err.message); }
+  finally { fin(); }
+}
+
+async function partager(texte, lien) {
+  try {
+    if (window.Android) { window.Android.partager(texte + ' ' + lien); return; }
+    if (navigator.share) { await navigator.share({ title: 'Bad Habits Can Die', text: texte, url: lien }); return; }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  await copier(lien, 'Lien copié', 'Colle-le dans ta conversation.');
+}
+
+async function copier(texte, titre, corps) {
+  try { await navigator.clipboard.writeText(texte); banniere(titre, corps); }
+  catch (e) {
+    ouvrir(`<h2>Copie ce lien</h2><textarea readonly style="width:100%;min-height:90px;border-radius:12px;padding:10px;background:var(--encre-2);color:var(--papier);border:1px solid var(--trait)">${esc(texte)}</textarea>
+      <button class="btn large" data-a="fermerCalque">OK</button>`);
+  }
+}
+
+/* ================= Notifications du téléphone ================= */
+
+async function activerNotifs() {
+  if (ios && !autonome()) {
+    ouvrir(`<h2>Sur iPhone</h2><p class="discret">Touche <b>Partager</b> puis <b>« Sur l'écran d'accueil »</b>, et ouvre l'appli depuis l'icône. Les notifications marchent seulement comme ça.</p>
+      <button class="btn large" data-a="fermerCalque">Compris</button>`);
+    return;
+  }
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) { banniere('Pas de notifications', 'Ce navigateur ne les gère pas. Essaie avec Chrome.'); return; }
+  const fin = attente('Activation des notifications…');
+  try {
+    const reg = await navigator.serviceWorker.register('sw.js');
+    await navigator.serviceWorker.ready;
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') throw new Error('Tu as refusé. Autorise-les dans les réglages du navigateur.');
+    const r = await fetch(SERVEUR + '?a=cle');
+    const { cle } = await r.json();
+    let abo = await reg.pushManager.getSubscription();
+    if (abo) await abo.unsubscribe();
+    abo = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uVersOctets(cle) });
+    const d = await appel('abonner', { abonnement: abo.toJSON(), appareil: navigator.userAgent, partie: undefined });
+    L.appareil = { id: d.id, secret: d.secret };
+    sauverLocal();
+    try { localStorage.setItem('bhcd-appareil', JSON.stringify(d)); } catch (e) { /* rien */ }
+    const c = await caches.open('bhcd-config');
+    await c.put('config', new Response(JSON.stringify({ serveur: SERVEUR, id: d.id, secret: d.secret })));
+    banniere('Notifications activées', 'Tu seras prévenu à chaque rebondissement.');
+    son('badge');
+  } catch (err) {
+    banniere('Notifications', err.message);
+  } finally { fin(); render(); }
+}
+
 /* ================= Actions (clics) ================= */
 
 const ACTIONS = {
-  onbSuivant() {
-    const o = S.onb;
-    if (o.etape === 2 && o.habit !== 'autre') o.nomAutre = '';
-    if (o.etape === 3 && !o.code) o.code = codeInvitation();
-    o.etape++;
+  etapeSuivante() {
+    const b = E.b;
+    if (b && E.etape === 1 && b.habit !== 'autre') b.nomAutre = '';
+    E.etape++;
     son('tic');
     render(true);
   },
-  couleur(ds) { S.onb.couleur = ds.c; son('tic'); render(); },
+  couleur(ds) { if (!E.b) return; E.b.couleur = ds.c; son('tic'); render(); },
+  async inscrire() {
+    const b = E.b;
+    if (!b || !b.pseudo.trim()) return;
+    const fin = attente('Création de ton profil…');
+    try {
+      const d = await appel('inscrire', { pseudo: b.pseudo.trim(), couleur: b.couleur });
+      L.joueur = d.joueur; L.secret = d.secret; L.pseudo = d.pseudo; L.couleur = d.couleur;
+      sauverLocal();
+      E = { mode: null, etape: 0, b: null, apercu: null };
+      son('go');
+      if (L.invitation) ouvrirInvitation(L.invitation); else render(true);
+    } catch (err) { banniere('Inscription impossible', err.message); }
+    finally { fin(); }
+  },
   habit(ds) {
-    if (S.pret) return; // l'ajout de défi gère ses propres clics
-    S.onb.habit = ds.k; son('tic'); render();
+    if (!E.b) return;
+    E.b.habit = ds.k; son('tic'); render();
     if (ds.k === 'autre') { const i = $('#nomAutre'); if (i) i.focus(); }
   },
-  suggestion(ds) { if (S.pret) return; S.onb.gages.push(ds.t); son('pop'); render(); },
-  retirerGage(ds) { if (S.pret) return; S.onb.gages.splice(Number(ds.i), 1); render(); },
+  suggestion(ds) { if (!E.b) return; E.b.gages.push(ds.t); son('pop'); render(); },
+  retirerGage(ds) { if (!E.b) return; E.b.gages.splice(Number(ds.i), 1); render(); },
   ajouterGage() {
-    if (S.pret) return;
+    if (!E.b) return;
     const i = $('#nouveauGage');
     const v = i && i.value.trim();
-    if (v) { S.onb.gages.push(v); son('pop'); render(); }
+    if (v) { E.b.gages.push(v); son('pop'); render(); const j = $('#nouveauGage'); if (j) j.focus(); }
   },
+  hub() { E = { mode: 'hub', etape: 0, b: null, apercu: null }; render(true); },
+  annuler() { quitterEcran(); },
+  creer() { E = { mode: 'creer', etape: 0, b: null, apercu: null }; son('tic'); render(true); },
+  creerPartie() { creerPartie(false); },
+  creerSpectateur() { creerPartie(true); },
+  rejoindrePartie() { rejoindrePartie(false); },
+  rejoindreSpectateur() { rejoindrePartie(true); },
+  collerLien() {
+    const inv = lireLien($('#lienColle') && $('#lienColle').value);
+    if (!inv) { banniere('Lien non reconnu', 'Colle le lien complet reçu de ton ami.'); return; }
+    ouvrirInvitation(inv);
+  },
+  copierInvitation() {
+    const inv = L.invitation;
+    if (inv) copier(SITE + '#j=' + inv.code + '.' + inv.cle, 'Lien copié', 'Ajoute l\'appli à l\'écran d\'accueil, ouvre-la et colle-le.');
+  },
+  ouvrirPartie(ds) { ouvrirPartie(ds.id); },
   inviter() {
-    const code = S.partie ? S.partie.code : (S.onb.code || (S.onb.code = codeInvitation()));
-    const nomP = S.partie ? S.partie.nom : S.onb.nomPartie;
-    const texte = `Rejoins ma partie « ${nomP} » sur Bad Habits Can Die. On a un an pour tuer nos mauvaises habitudes. Code : ${code}`;
-    try {
-      if (window.Android) { window.Android.partager(texte); return; }
-      if (navigator.share) { navigator.share({ text: texte }).catch(() => {}); return; }
-    } catch (e) { /* rien */ }
-    banniere('Code d\'invitation', code);
+    partager(`Rejoins ma partie « ${P.nom} » sur Bad Habits Can Die. Un an pour tuer nos mauvaises habitudes, aucune pitié.`, lienInvitation());
   },
-  go() { son('tic'); lancerGO(); },
+  go() { jouer('go', {}, 'Lancement…'); },
+  activerNotifs() { activerNotifs(); },
   reagir(ds, el) {
-    const e = S.fil.find(x => x.id === ds.evt);
+    const e = P.fil.find(x => x.id === ds.evt);
     if (!e) return;
     const k = ds.k;
-    if (e.mes[k]) { e.mes[k] = false; e.reac[k] = Math.max(0, e.reac[k] - 1); }
+    const l = e.reac[k] || (e.reac[k] = []);
+    const i = l.indexOf(L.joueur);
+    if (i >= 0) l.splice(i, 1);
     else {
-      e.mes[k] = true; e.reac[k]++; S.stats.reacs++;
+      l.push(L.joueur);
       const r = el.getBoundingClientRect();
       const em = REACTIONS.find(x => x[0] === k)[1];
-      for (let i = 0; i < 5; i++) {
+      for (let n = 0; n < 5; n++) {
         const f = document.createElement('div');
         f.className = 'envol'; f.textContent = em;
         f.style.left = (r.left + r.width / 2 - 13) + 'px'; f.style.top = (r.top - 10) + 'px';
         f.style.setProperty('--dx', ((Math.random() - 0.5) * 60) + 'px');
-        f.style.animationDelay = (i * 0.06) + 's';
+        f.style.animationDelay = (n * 0.06) + 's';
         document.body.appendChild(f);
         setTimeout(() => f.remove(), 1400);
       }
       son('pop'); vibrer('15');
     }
     render();
-    if (S.stats.reacs >= 10) verifierBadges();
+    jouer('reagir', { evt: e.id, k });
   },
-  choisir(ds) { const g = S.gages.find(x => x.id === ds.id); if (g) feuilleChoisir(g); },
-  juger(ds) { const g = S.gages.find(x => x.id === ds.id); if (g) feuilleJuger(g); },
-  prouver(ds) { const g = S.gages.find(x => x.id === ds.id); if (g) feuilleProuver(g); },
-  repondre(ds) { const a = S.accusations.find(x => x.id === ds.id); if (a) feuilleRepondre(a); },
+  choisir(ds) { const g = P.gages.find(x => x.id === ds.id); if (g) feuilleChoisir(g); },
+  juger(ds) { const g = P.gages.find(x => x.id === ds.id); if (g) feuilleJuger(g); },
+  prouver(ds) { const g = P.gages.find(x => x.id === ds.id); if (g) feuilleProuver(g); },
+  repondre(ds) { const a = P.accusations.find(x => x.id === ds.id); if (a) feuilleRepondre(a); },
+  voter(ds) { const a = P.accusations.find(x => x.id === ds.id); if (a) feuilleVoter(a); },
   denoncer(ds) { feuilleDenoncer(ds.id); },
   parier(ds) { feuillePari(ds.id); },
   ajouterDefi() { feuilleAjouterDefi(); },
-  son() { S.son = !S.son; render(); son('pop'); },
-  avancer(ds, el) {
-    el.disabled = true;
-    avancer(Number(ds.n)).finally(() => { el.disabled = false; });
-  },
-  reinitialiser() {
-    const el = ouvrir(`<h2>Tout recommencer ?</h2><p class="discret" style="margin:0">La partie, les bêtes, les badges et les points de ce téléphone seront effacés.</p>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <button class="btn fantome" data-a="fermerCalque">Annuler</button>
-        <button class="btn corail" id="effacer">Effacer</button></div>`);
-    $('#effacer', el).addEventListener('click', () => {
-      try { localStorage.removeItem(CLE); } catch (e) { /* rien */ }
-      S = etatNeuf();
-      for (const k in PV_AFFICHE) delete PV_AFFICHE[k];
-      fermerEl(el);
-      render(true);
-    });
-  },
+  voirMedia(ds, el) { el.innerHTML = 'Déchiffrement…'; chargerMedia(ds.id); },
+  son() { L.son = !L.son; sauverLocal(); render(); son('pop'); },
   voirBadge(ds) {
     const b = BADGES.find(x => x.id === ds.id);
-    const ok = S.badges[b.id];
+    const ok = moiMembre().badges[b.id];
     ouvrir(`<div style="display:grid;justify-items:center;gap:8px;text-align:center">
       <div style="width:120px;height:120px;${ok ? '' : 'filter:grayscale(1) brightness(.5)'}">${medaille(b)}</div>
       <h2>${esc(b.nom)}</h2><p class="discret" style="margin:0">${esc(b.desc)}</p>
@@ -1472,53 +1575,69 @@ document.addEventListener('click', e => {
 });
 
 document.addEventListener('input', e => {
-  if (S.pret) return;
-  const t = e.target;
-  if (t.id === 'pseudo') { S.onb.pseudo = t.value; const s = $('#suite1'); if (s) s.disabled = !t.value.trim(); sauver(); }
+  const t = e.target, b = E.b;
+  if (!b) return;
+  if (t.id === 'pseudo') { b.pseudo = t.value; const s = $('#suite'); if (s) s.disabled = !t.value.trim(); }
   if (t.id === 'nomAutre') {
-    S.onb.nomAutre = t.value; sauver();
-    const s = document.querySelector('[data-a="onbSuivant"]'); if (s) s.disabled = !t.value.trim();
+    b.nomAutre = t.value;
+    const s = document.querySelector('[data-a="etapeSuivante"]'); if (s) s.disabled = !t.value.trim();
   }
-  if (t.id === 'nomPartie') { S.onb.nomPartie = t.value; sauver(); }
+  if (t.id === 'nomPartie') b.nom = t.value;
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.id === 'nouveauGage' && !S.pret) ACTIONS.ajouterGage();
+  if (e.key !== 'Enter') return;
+  if (e.target.id === 'nouveauGage' && E.b) ACTIONS.ajouterGage();
+  if (e.target.id === 'lienColle') ACTIONS.collerLien();
 });
-
-/** Étape 4 de la démo : les amis fictifs rejoignent un par un. */
-let rejointEnCours = false;
-function faireRejoindre() {
-  if (rejointEnCours || S.onb.rejoints >= BOTS.length) return;
-  rejointEnCours = true;
-  setTimeout(() => {
-    rejointEnCours = false;
-    if (S.pret || S.onb.etape !== 4) return;
-    S.onb.rejoints++;
-    const b = BOTS[S.onb.rejoints - 1];
-    banniere(`${b.nom} a rejoint ta partie`, `Et joue contre ${HABITUDES[b.habit].bete}.`);
-    son('pop'); vibrer('25');
-    const liste = $('#rejoints');
-    if (liste) liste.insertAdjacentHTML('beforeend', carteRejoint(b).replace('joueur simple', 'joueur simple arrive'));
-    const go = $('#btnGo'); if (go) go.disabled = false;
-    const att = $('#attente'); if (att) att.hidden = S.onb.rejoints >= BOTS.length;
-    sauver();
-    faireRejoindre();
-  }, 1300 + Math.random() * 900);
-}
-
-function carteRejoint(b) {
-  return `<div class="carte joueur simple">
-    <div class="avatar" style="background:${b.couleur}">${b.nom[0]}</div>
-    <div><b>${b.nom}</b><div class="discret">joue contre ${HABITUDES[b.habit].bete} ${HABITUDES[b.habit].e}</div></div></div>`;
-}
 
 // Minuteurs qui défilent
 setInterval(() => {
   document.querySelectorAll('[data-ech]').forEach(m => {
-    const avant = m.textContent.startsWith('Il lui') ? 'Il lui reste ' : 'Il te reste ';
-    m.textContent = avant + resteTemps(Number(m.dataset.ech));
+    m.textContent = (m.dataset.txt || 'Il te reste ') + resteTemps(Number(m.dataset.ech));
   });
 }, 20000);
 
-render(true);
+// La partie se met à jour toute seule : souvent dans la salle d'attente, régulièrement en jeu.
+let dernierRafraichissement = 0;
+setInterval(() => {
+  if (document.visibilityState !== 'visible' || !P || E.mode || pile.length) return;
+  const periode = P.debut ? 20000 : 6000;
+  if (Date.now() - dernierRafraichissement < periode) return;
+  dernierRafraichissement = Date.now();
+  rafraichir();
+}, 2000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { dernierRafraichissement = Date.now(); rafraichir(); } });
+
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.type === 'maj') rafraichir(); });
+}
+
+/* ================= Démarrage ================= */
+
+// Lien d'invitation ouvert alors que l'appli tourne déjà
+window.addEventListener('hashchange', () => {
+  const inv = lireLien(location.hash);
+  if (!inv) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  if (L.joueur) ouvrirInvitation(inv);
+  else { L.invitation = inv; sauverLocal(); }
+});
+
+(function demarrer() {
+  const inv = lireLien(location.hash);
+  if (inv) {
+    history.replaceState(null, '', location.pathname + location.search);
+    L.invitation = inv;
+    sauverLocal();
+  }
+  if (!SERVEUR) {
+    $('#vue').innerHTML = '<div class="vide">Le serveur n\'est pas branché.</div>';
+    return;
+  }
+  if (!L.joueur) { render(true); return; }
+  if (L.invitation) { ouvrirInvitation(L.invitation); return; }
+  if (L.courante && L.parties.some(x => x.id === L.courante)) { ouvrirPartie(L.courante); return; }
+  render(true);
+})();
