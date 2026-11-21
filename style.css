@@ -431,3 +431,10 @@ button.depot { background: transparent; font: inherit; font-weight: 900; cursor:
 @keyframes camflash { from { opacity: .9; } to { opacity: 0; } }
 .cam-ouverte #app, .cam-ouverte #calques, .cam-ouverte #bannieres, .cam-ouverte #confettis { visibility: hidden; }
 .cam-info { position: absolute; left: 50%; transform: translateX(-50%); color: #fff9; font-size: 11px; font-weight: 700; }
+
+/* Bandeau d'installation */
+.carte-install { display: flex; flex-direction: column; gap: 10px; }
+.etapes-install { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.4; }
+.sous-titre-install { font-weight: 900; font-size: 13px; color: var(--soleil); margin-top: 2px; }
+.carte-install details summary { cursor: pointer; font-weight: 800; font-size: 13px; opacity: .8; margin-bottom: 6px; }
+.ico-partage { display: inline-block; border: 1.5px solid currentColor; border-radius: 4px; padding: 0 4px; font-size: 12px; }

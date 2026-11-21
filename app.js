@@ -11,7 +11,7 @@ const J = 86400000, H = 3600000;
 const PV_DEPART = 300, PV_RECHUTE = 10, DUREE = 365, MAX_DEFIS = 3;
 const MAX_VIDEO = 20 * 1024 * 1024, MAX_DUREE_VIDEO = 16;
 const CLE = 'bhcd-v2';
-const VERSION_APPLI = '11';
+const VERSION_APPLI = '12';
 
 const HABITUDES = {
   clope:     { nom: 'Fumer',           e: '🚬', bete: 'La Clope',     c: '#A8988A' },
@@ -658,6 +658,38 @@ function carteBete(d, grande) {
   </div>`;
 }
 
+/* Proposition d'installation d'Android (Chrome), gardée pour le bouton « Installer ». */
+let invitationInstall = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); invitationInstall = e; if (!P) render(); });
+window.addEventListener('appinstalled', () => { invitationInstall = null; if (!P) render(); });
+
+/** Bandeau qui explique comment mettre l'appli sur l'écran d'accueil (seulement si elle n'y est pas déjà). */
+function carteInstaller() {
+  if (autonome() || window.Android) return '';
+  const etapesIos = `<ol class="etapes-install">
+      <li>Ouvre ce site dans <b>Safari</b>.</li>
+      <li>Touche le bouton <b>Partager</b> <span class="ico-partage">⬆︎</span> en bas de l'écran.</li>
+      <li>Descends et choisis <b>« Sur l'écran d'accueil »</b>, puis <b>Ajouter</b>.</li>
+      <li>Ouvre ensuite l'appli depuis sa nouvelle icône : c'est obligatoire pour les notifications.</li>
+    </ol>`;
+  const etapesAndroid = `<ol class="etapes-install">
+      <li>Ouvre ce site dans <b>Chrome</b>.</li>
+      <li>Touche le menu <b>⋮</b> en haut à droite.</li>
+      <li>Choisis <b>« Ajouter à l'écran d'accueil »</b> ou <b>« Installer l'application »</b>, puis <b>Installer</b>.</li>
+      <li>Ouvre ensuite l'appli depuis sa nouvelle icône.</li>
+    </ol>`;
+  const android = /Android/i.test(navigator.userAgent);
+  const principal = ios ? etapesIos : etapesAndroid;
+  const autre = ios ? ['Android', etapesAndroid] : ['iPhone', etapesIos];
+  return `<div class="carte-tache carte-install"><span class="etiquette">📲 METS L'APPLI SUR TON ÉCRAN D'ACCUEIL</span>
+      <p style="margin:0">Elle s'ouvrira comme une vraie appli, en plein écran, avec les notifications.</p>
+      ${invitationInstall ? `<button class="btn soleil" data-a="installer">Installer en un clic</button>` : ''}
+      ${ios || android ? `<div class="sous-titre-install">${ios ? 'Sur iPhone' : 'Sur Android'}</div>${principal}
+        <details><summary>Et sur ${autre[0]} ?</summary>${autre[1]}</details>`
+      : `<div class="sous-titre-install">Sur iPhone</div>${etapesIos}<div class="sous-titre-install">Sur Android</div>${etapesAndroid}`}
+    </div>`;
+}
+
 function carteNotifs() {
   if (L.appareil && 'Notification' in window && Notification.permission === 'granted') return '';
   if (window.Android) return '';
@@ -841,6 +873,7 @@ function vueAccueil() {
             <div class="carte"><b>Chaque jour tenu lui fait mal.</b> Chaque rechute la soigne.</div>
             <div class="carte"><b>Tu craques ? Tu te balances.</b> Le sort désigne un proche qui choisit ton châtiment.</div>
           </div>
+          <div style="max-width:320px;width:100%;text-align:left">${carteInstaller()}</div>
         </div>
         <button class="btn corail large" data-a="etapeSuivante">Commencer</button>
       </div>`;
@@ -867,6 +900,7 @@ function vueHub() {
           <button class="btn soleil petit" data-a="collerLien">OK</button></div>
       </div>
       ${L.parties.length ? `<div class="titre-section">Tes parties</div><div class="pile">${listeParties()}</div>` : ''}
+      ${carteInstaller()}
       ${carteNotifs()}
     </div>`;
 }
@@ -1750,6 +1784,13 @@ async function activerNotifs() {
 /* ================= Actions (clics) ================= */
 
 const ACTIONS = {
+  async installer() {
+    if (!invitationInstall) return;
+    const e = invitationInstall;
+    invitationInstall = null;
+    try { await e.prompt(); await e.userChoice; } catch (err) { /* rien */ }
+    render();
+  },
   etapeSuivante() {
     const b = E.b;
     if (b && E.etape === 1 && b.habit !== 'autre') b.nomAutre = '';
