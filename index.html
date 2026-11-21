@@ -8,12 +8,12 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Bad Habits Can Die</title>
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <div id="app">
   <header id="entete" hidden>
-    <div class="logo-mini">BHCD</div>
+    <button class="logo-mini choix-partie" id="btn-parties" aria-label="Changer de partie"><span id="nom-partie">BHCD</span><span class="fleche">▾</span><i class="point" id="point-parties" hidden></i></button>
     <div class="entete-infos">
       <span class="puce puce-jour" id="puce-jour">J+0</span>
       <span class="puce puce-points" id="puce-points">100 pts</span>
@@ -31,7 +31,7 @@
 <div id="calques"></div>
 <div id="bannieres"></div>
 <canvas id="confettis"></canvas>
-<script src="config.js?v=2"></script>
-<script src="app.js?v=2"></script>
+<script src="config.js?v=3"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>

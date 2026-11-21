@@ -33,7 +33,7 @@ self.addEventListener('push', e => {
         badge: 'badge-96.png',
         tag: n.id || 'bhcd',
         vibrate: [120, 60, 120],
-        data: { url: './' }
+        data: { url: './' + (n.partie ? '?partie=' + encodeURIComponent(n.partie) : ''), partie: n.partie || '' }
       });
     }
   })());
@@ -41,8 +41,14 @@ self.addEventListener('push', e => {
 
 self.addEventListener('notificationclick', e => {
   e.notification.close();
+  const d = e.notification.data || {};
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(liste => {
-    for (const c of liste) if ('focus' in c) return c.focus();
-    return self.clients.openWindow('./');
+    for (const c of liste) {
+      if ('focus' in c) {
+        if (d.partie) c.postMessage({ type: 'ouvrir', partie: d.partie });
+        return c.focus();
+      }
+    }
+    return self.clients.openWindow(d.url || './');
   }));
 });

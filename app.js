@@ -103,7 +103,8 @@ const attendre = ms => new Promise(r => setTimeout(r, ms));
 const hasard = a => a[Math.floor(Math.random() * a.length)];
 const maintenant = () => Date.now();
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]));
-const nom = id => (P && P.membres[id] ? P.membres[id].nom : '?');
+const membreOuAncien = id => (P && (P.membres[id] || (P.anciens && P.anciens[id]))) || null;
+const nom = id => { const m = membreOuAncien(id); return m ? m.nom : '?'; };
 const defi = id => P.defis.find(d => d.id === id);
 const mesDefis = () => P.defis.filter(d => d.qui === L.joueur);
 const moiMembre = () => P.membres[L.joueur];
@@ -152,7 +153,7 @@ function resteTemps(ech) {
 }
 
 function avatar(id, classe = '', attrs = '') {
-  const m = (P && P.membres[id]) || { nom: '?', couleur: '#888' };
+  const m = membreOuAncien(id) || { nom: '?', couleur: '#888' };
   return `<div class="avatar ${classe}" style="background:${esc(m.couleur)}" ${attrs}>${esc(m.nom.charAt(0).toUpperCase())}</div>`;
 }
 
@@ -172,10 +173,13 @@ async function appel(a, params = {}) {
 }
 
 /** Action de jeu : envoie, reçoit la partie à jour, affiche ce qui a changé. */
+let actionsEnCours = 0;
 async function jouer(a, params, texteAttente) {
   const fin = texteAttente ? attente(texteAttente) : null;
+  actionsEnCours++;
   try {
     const d = await appel(a, params);
+    if (d.partie_quittee) { oublierPartie(d.partie); return true; }
     if (d.etat) majEtat(d.etat);
     return true;
   } catch (err) {
@@ -183,6 +187,7 @@ async function jouer(a, params, texteAttente) {
     son('degat');
     return false;
   } finally {
+    actionsEnCours--;
     if (fin) fin();
   }
 }
@@ -192,8 +197,9 @@ async function rafraichir() {
   if (!P || !L.joueur || rafraichissement) return;
   rafraichissement = (async () => {
     try {
-      const d = await appel('etat', { partie: P.id, v: P.v });
-      if (d.etat) majEtat(d.etat);
+      const id = P.id;
+      const d = await appel('etat', { partie: id, v: P.v });
+      if (d.etat && !actionsEnCours && P && P.id === id) majEtat(d.etat);
     } catch (err) {
       if (/introuvable|ne fais pas partie/.test(err.message)) oublierPartie(P.id);
     } finally { rafraichissement = null; }
@@ -526,6 +532,7 @@ function texteEvt(e) {
   const bete = d ? `<b>${esc(d.nom)}</b>` : '';
   switch (e.type) {
     case 'rejoint': return d ? `${N(e.qui)} rejoint la partie et affronte ${bete} ${h.e}.` : `${N(e.qui)} rejoint la partie en spectateur.`;
+    case 'quitte': return `${N(e.qui)} a quitté la partie. Lâcheur.`;
     case 'lancement': return `${N(e.qui)} a appuyé sur GO. <b>365 jours</b>, aucune pitié.`;
     case 'go': return `${N(e.qui)} part en guerre contre ${bete} ${h.e}.`;
     case 'aveu': return e.apres
@@ -575,13 +582,14 @@ function evtHTML(e) {
 
 /* ================= Tâches (ce que la partie attend de toi) ================= */
 
-function taches() {
+function taches(Q = P) {
   const t = [], moi = L.joueur;
-  for (const a of P.accusations) {
+  if (!Q) return t;
+  for (const a of Q.accusations) {
     if (a.cible === moi && a.statut === 'ouverte') t.push({ type: 'accusation', a });
     if (a.statut === 'vote' && a.cible !== moi && !(moi in a.votes)) t.push({ type: 'voter', a });
   }
-  for (const g of P.gages) {
+  for (const g of Q.gages) {
     if (g.bourreau === moi && g.statut === 'attente') t.push({ type: 'choisir', g });
     if (g.bourreau === moi && g.statut === 'prouve') t.push({ type: 'juger', g });
     if (g.victime === moi && g.statut === 'choisi') t.push({ type: 'faire', g });
@@ -738,9 +746,42 @@ function vueBadges() {
     }).join('')}</div>`;
 }
 
+function aFaire(id) {
+  const Q = P && P.id === id ? P : partieMemorisee(id);
+  return Q ? taches(Q).filter(t => !['patience', 'validation'].includes(t.type)).length : 0;
+}
 function listeParties() {
-  return L.parties.map(x => `<button class="carte partie-ligne ${P && x.id === P.id ? 'actuelle' : ''}" data-a="ouvrirPartie" data-id="${x.id}">
-      <b>${esc(x.nom)}</b><span class="discret">${P && x.id === P.id ? 'affichée' : 'ouvrir'}</span></button>`).join('');
+  return L.parties.map(x => {
+    const n = aFaire(x.id), ici = P && x.id === P.id;
+    return `<button class="carte partie-ligne ${ici ? 'actuelle' : ''}" data-a="ouvrirPartie" data-id="${x.id}">
+      <b>${esc(x.nom)}</b><span class="droite">${n ? `<span class="puce" style="background:var(--corail);color:#fff">${n} à faire</span>` : ''}
+      <span class="discret">${ici ? 'affichée' : 'ouvrir'}</span></span></button>`;
+  }).join('');
+}
+function feuilleParties() {
+  ouvrir(`<h2>Tes parties</h2><div class="pile">${listeParties()}</div>
+    <button class="btn fantome large" data-a="hub">Créer ou rejoindre une partie</button>`);
+}
+
+/** Les autres parties se mettent à jour en arrière-plan, pour la pastille « à faire ». */
+let tourAutres = 0;
+async function rafraichirAutres() {
+  const autres = L.parties.filter(x => !P || x.id !== P.id);
+  if (!autres.length) return;
+  const x = autres[tourAutres++ % autres.length];
+  const memo = partieMemorisee(x.id);
+  try {
+    const d = await appel('etat', { partie: x.id, v: memo ? memo.v : 0 });
+    if (d.etat) { try { localStorage.setItem('bhcd-p:' + x.id, JSON.stringify(d.etat)); } catch (e) { /* rien */ } x.nom = d.etat.nom; sauverLocal(); }
+  } catch (err) {
+    if (/introuvable|ne fais pas partie/.test(err.message)) { L.parties = L.parties.filter(y => y.id !== x.id); sauverLocal(); }
+  }
+  majPastille();
+}
+function majPastille() {
+  const n = L.parties.filter(x => !P || x.id !== P.id).reduce((s, x) => s + aFaire(x.id), 0);
+  const el = $('#point-parties');
+  if (el) el.hidden = !n;
 }
 
 function vueMoi() {
@@ -770,7 +811,17 @@ function vueMoi() {
       <div class="carte interrupteur"><span>Notifications</span>
         <button class="btn petit ${notifOk ? 'menthe' : 'soleil'}" data-a="activerNotifs">${notifOk ? 'Activées' : 'Activer'}</button></div>
     </div>
+    ${zoneDanger()}
     <p class="discret" style="text-align:center;margin:18px 0 6px">Photos et vidéos chiffrées sur ton téléphone, effacées sous 24 h.</p>`;
+}
+
+function zoneDanger() {
+  const createur = P.createur === L.joueur;
+  return `<div class="titre-section">Cette partie</div>
+    <div class="zone-danger">
+      <button class="btn danger" data-a="quitter">Quitter « ${esc(P.nom)} »</button>
+      ${createur ? `<button class="btn danger" data-a="supprimer">Supprimer la partie pour tout le monde</button>` : ''}
+    </div>`;
 }
 
 /* ---------- Avant la partie : accueil, création, invitation, salon ---------- */
@@ -922,6 +973,7 @@ function vueSalon() {
            <p class="discret" style="margin:0;text-align:center">${n < 2 ? 'Il faut au moins une autre personne pour lancer.' : 'Tout le monde sera prévenu. L\'année commence.'}</p>`
         : `<div class="carte" style="text-align:center">En attente du GO de <b>${esc(nom(P.createur))}</b>…</div>`}
       <button class="btn fantome" data-a="hub">Mes parties</button>
+      ${zoneDanger()}
     </div>`;
 }
 
@@ -947,6 +999,8 @@ function render(anim = false) {
     const j = Math.floor((maintenant() - P.debut) / J);
     $('#puce-jour').textContent = 'J+' + Math.max(0, j);
     $('#puce-points').textContent = points(L.joueur) + ' pts';
+    $('#nom-partie').textContent = P.nom;
+    majPastille();
     document.querySelectorAll('.onglet').forEach(b => b.classList.toggle('actif', b.dataset.onglet === L.onglet));
     vue.innerHTML = { fil: vueFil, partie: vuePartie, badges: vueBadges, moi: vueMoi }[L.onglet]();
     animerPV();
@@ -996,7 +1050,8 @@ function nouveautes(evts, ancien) {
   let bannieres = 0;
   const lancement = evts.some(e => e.type === 'lancement');
   for (const e of evts) {
-    if (e.type === 'lancement' || (e.type === 'go' && e.qui === moi && !lancement)) enFile(() => compteARebours());
+    const recent = maintenant() - e.t < 10 * 60000;
+    if (recent && (e.type === 'lancement' || (e.type === 'go' && e.qui === moi && !lancement))) enFile(() => compteARebours());
     else if (e.type === 'tirage' && (e.qui === moi || e.bourreau === moi)) {
       const g = P.gages.find(x => x.id === e.gage);
       if (g && g.statut === 'attente') enFile(() => tirage(e));
@@ -1007,7 +1062,8 @@ function nouveautes(evts, ancien) {
       const tmp = document.createElement('div');
       tmp.innerHTML = texteEvt(e);
       const texte = tmp.textContent.trim();
-      if (texte) { bannieres++; setTimeout(() => { banniere(P.nom, texte); son('pop'); vibrer('40,60,40'); }, bannieres * 900); }
+      const nomP = P.nom;
+      if (texte) { bannieres++; setTimeout(() => { banniere(nomP, texte); son('pop'); vibrer('40,60,40'); }, bannieres * 900); }
     }
   }
 }
@@ -1111,27 +1167,32 @@ async function scenesHonte(d) {
 
 /* ================= Feuilles d'action ================= */
 
-function zoneDepot(id, texte) {
-  return `<label class="depot" for="${id}"><span class="e">📸</span>${esc(texte)}<span class="discret" style="font-weight:700">Photo, ou vidéo de 15 s maximum</span></label>
-    <input type="file" id="${id}" accept="image/*,video/*" hidden>
+/** Trois façons d'apporter la preuve : l'appareil photo et la caméra s'ouvrent directement, ou la galerie. */
+function zoneDepot(id, texte, selfie) {
+  const cam = selfie ? 'user' : 'environment';
+  return `<div class="discret" style="font-weight:800;color:var(--papier)">${esc(texte)}</div>
+    <div class="depots" id="${id}">
+      <label class="depot"><span class="e">📸</span>Photo<input type="file" accept="image/*" capture="${cam}" hidden></label>
+      <label class="depot"><span class="e">🎥</span>Vidéo 15 s<input type="file" accept="video/*" capture="${cam}" hidden></label>
+      <label class="depot"><span class="e">🖼️</span>Galerie<input type="file" accept="image/*,video/*" hidden></label>
+    </div>
     <div class="apercu-preuve" id="${id}-apercu" hidden></div>`;
 }
 
 function brancherDepot(el, id, quandPret) {
-  const input = $('#' + id, el);
-  input.addEventListener('change', async () => {
+  $('#' + id, el).querySelectorAll('input[type=file]').forEach(input => input.addEventListener('change', async () => {
     const f = input.files && input.files[0];
     if (!f) return;
     const m = await preparerFichier(f);
+    input.value = '';
     if (m.erreur) { banniere('Fichier refusé', m.erreur); return; }
     const ap = $('#' + id + '-apercu', el);
     ap.hidden = false;
     ap.innerHTML = m.video
       ? `<video src="${m.url}" controls playsinline autoplay muted loop></video>`
       : `<img src="${m.url}" alt="Aperçu">`;
-    el.querySelector('label.depot').innerHTML = '<span class="e">🔁</span>Changer';
     quandPret(m);
-  });
+  }));
 }
 
 /** Chiffre puis envoie le média avec l'action. */
@@ -1157,7 +1218,7 @@ function feuilleCraque() {
   const el = ouvrir(`<h2>Tu as craqué ?</h2>
     <p class="discret" style="margin:0">Balance-toi. Toute la partie sera prévenue et le sort désignera ton bourreau. La photo est effacée au bout de 24 h.</p>
     ${vivants.length > 1 ? `<div class="puces-choix" id="choixDefi">${vivants.map(d => `<button class="puce-choix" data-d="${d.id}">${(HABITUDES[d.habit] || HABITUDES.autre).e} ${esc(d.nom)}</button>`).join('')}</div>` : ''}
-    ${zoneDepot('preuveAveu', 'Prends-toi en flagrant délit')}
+    ${zoneDepot('preuveAveu', 'Prends-toi en flagrant délit', true)}
     <button class="btn corail large" id="envoyerAveu" disabled>Je me balance</button>`);
   const marquer = () => el.querySelectorAll('#choixDefi .puce-choix').forEach(b => {
     b.style.borderColor = b.dataset.d === choix ? 'var(--corail)' : ''; b.style.borderStyle = b.dataset.d === choix ? 'solid' : '';
@@ -1364,11 +1425,16 @@ async function ouvrirPartie(id) {
 }
 
 function oublierPartie(id) {
+  const ref = L.parties.find(x => x.id === id);
+  if (ref && P && P.id === id) banniere('Partie fermée', `« ${ref.nom} » n'est plus dans tes parties.`);
   L.parties = L.parties.filter(x => x.id !== id);
+  delete L.vus[id];
   if (L.courante === id) L.courante = null;
   try { localStorage.removeItem('bhcd-p:' + id); } catch (e) { /* rien */ }
-  if (P && P.id === id) P = null;
+  const affichee = P && P.id === id;
+  if (affichee) P = null;
   sauverLocal();
+  if (affichee && L.parties.length) { ouvrirPartie(L.parties[0].id); return; }
   render(true);
 }
 
@@ -1511,7 +1577,23 @@ const ACTIONS = {
     const inv = L.invitation;
     if (inv) copier(SITE + '#j=' + inv.code + '.' + inv.cle, 'Lien copié', 'Ajoute l\'appli à l\'écran d\'accueil, ouvre-la et colle-le.');
   },
-  ouvrirPartie(ds) { ouvrirPartie(ds.id); },
+  ouvrirPartie(ds, el) { const c = el.closest('.calque'); if (c) fermerEl(c); ouvrirPartie(ds.id); },
+  quitter() {
+    const el = ouvrir(`<h2>Quitter « ${esc(P.nom)} » ?</h2>
+      <p class="discret" style="margin:0">Tu disparais des joueurs, ta bête et tes paris en cours aussi. Les autres sont prévenus. Pour revenir, il faudra un nouveau lien.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button class="btn fantome" data-a="fermerCalque">Rester</button>
+        <button class="btn corail" id="ok">Quitter</button></div>`);
+    $('#ok', el).addEventListener('click', () => { fermerEl(el); jouer('quitter', {}, 'Tu quittes la partie…'); });
+  },
+  supprimer() {
+    const el = ouvrir(`<h2>Supprimer « ${esc(P.nom)} » ?</h2>
+      <p class="discret" style="margin:0">La partie, le fil, les bêtes et les photos sont effacés définitivement pour tous les joueurs. Impossible de revenir en arrière.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button class="btn fantome" data-a="fermerCalque">Annuler</button>
+        <button class="btn corail" id="ok">Supprimer</button></div>`);
+    $('#ok', el).addEventListener('click', () => { fermerEl(el); jouer('supprimer', {}, 'Suppression…'); });
+  },
   inviter() {
     partager(`Rejoins ma partie « ${P.nom} » sur Bad Habits Can Die. Un an pour tuer nos mauvaises habitudes, aucune pitié.`, lienInvitation());
   },
@@ -1568,6 +1650,7 @@ document.addEventListener('click', e => {
   const o = e.target.closest('.onglet');
   if (o) { changerOnglet(o.dataset.onglet); return; }
   if (e.target.closest('#btn-craque')) { son('tic'); vibrer('30'); feuilleCraque(); return; }
+  if (e.target.closest('#btn-parties')) { son('tic'); feuilleParties(); return; }
   const b = e.target.closest('[data-a]');
   if (!b || b.disabled) return;
   const f = ACTIONS[b.dataset.a];
@@ -1602,16 +1685,21 @@ setInterval(() => {
 let dernierRafraichissement = 0;
 setInterval(() => {
   if (document.visibilityState !== 'visible' || !P || E.mode || pile.length) return;
-  const periode = P.debut ? 20000 : 6000;
+  const periode = P.debut ? 8000 : 4000;
   if (Date.now() - dernierRafraichissement < periode) return;
   dernierRafraichissement = Date.now();
   rafraichir();
 }, 2000);
+setInterval(() => { if (document.visibilityState === 'visible' && L.joueur) rafraichirAutres(); }, 45000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { dernierRafraichissement = Date.now(); rafraichir(); } });
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
-  navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.type === 'maj') rafraichir(); });
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (!e.data) return;
+    if (e.data.type === 'maj') { rafraichir(); rafraichirAutres(); }
+    if (e.data.type === 'ouvrir' && L.parties.some(x => x.id === e.data.partie) && (!P || P.id !== e.data.partie)) ouvrirPartie(e.data.partie);
+  });
 }
 
 /* ================= Démarrage ================= */
@@ -1638,6 +1726,10 @@ window.addEventListener('hashchange', () => {
   }
   if (!L.joueur) { render(true); return; }
   if (L.invitation) { ouvrirInvitation(L.invitation); return; }
+  const demandee = new URLSearchParams(location.search).get('partie');
+  if (demandee) history.replaceState(null, '', location.pathname);
+  if (demandee && L.parties.some(x => x.id === demandee)) { ouvrirPartie(demandee); return; }
   if (L.courante && L.parties.some(x => x.id === L.courante)) { ouvrirPartie(L.courante); return; }
+  if (L.parties.length) { ouvrirPartie(L.parties[0].id); return; }
   render(true);
 })();
