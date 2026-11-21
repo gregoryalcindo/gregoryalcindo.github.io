@@ -1167,27 +1167,164 @@ async function scenesHonte(d) {
 
 /* ================= Feuilles d'action ================= */
 
-/** Trois façons d'apporter la preuve : l'appareil photo et la caméra s'ouvrent directement, ou la galerie. */
+/** Trois façons d'apporter la preuve : l'appareil photo et la caméra de l'appli, ou la galerie. */
 function zoneDepot(id, texte, selfie) {
   const cam = selfie ? 'user' : 'environment';
   return `<div class="discret" style="font-weight:800;color:var(--papier)">${esc(texte)}</div>
     <div class="depots" id="${id}">
-      <label class="depot"><span class="e">📸</span>Photo<input type="file" accept="image/*" capture="${cam}" hidden></label>
-      <label class="depot"><span class="e">🎥</span>Vidéo 15 s<input type="file" accept="video/*" capture="${cam}" hidden></label>
+      <button type="button" class="depot" data-cam="photo" data-face="${cam}"><span class="e">📸</span>Photo</button>
+      <button type="button" class="depot" data-cam="video" data-face="${cam}"><span class="e">🎥</span>Vidéo 15 s</button>
       <label class="depot"><span class="e">🖼️</span>Galerie<input type="file" accept="image/*,video/*" hidden></label>
+      <input type="file" accept="image/*" capture="${cam}" hidden data-secours="photo">
+      <input type="file" accept="video/*" capture="${cam}" hidden data-secours="video">
     </div>
     <div class="apercu-preuve" id="${id}-apercu" hidden></div>`;
 }
 
 function brancherDepot(el, id, quandPret) {
-  $('#' + id, el).querySelectorAll('input[type=file]').forEach(input => input.addEventListener('change', async () => {
-    const f = input.files && input.files[0];
-    if (!f) return;
+  const zone = $('#' + id, el);
+  const traiter = async f => {
     const m = await preparerFichier(f);
-    input.value = '';
     if (m.erreur) { banniere('Fichier refusé', m.erreur); return; }
     montrerApercu(el, id, m, quandPret);
+  };
+  zone.querySelectorAll('input[type=file]').forEach(input => input.addEventListener('change', () => {
+    const f = input.files && input.files[0];
+    input.value = '';
+    if (f) traiter(f);
   }));
+  zone.querySelectorAll('[data-cam]').forEach(b => b.addEventListener('click', async () => {
+    const r = await camera(b.dataset.cam, b.dataset.face);
+    if (r === 'secours') zone.querySelector(`[data-secours="${b.dataset.cam}"]`).click();
+    else if (r) traiter(r);
+  }));
+}
+
+/* ================= Appareil photo intégré ================= */
+
+/** Ouvre la caméra dans l'appli. Le résultat est exactement ce qu'on voit à l'écran.
+    Rend un fichier, null si annulé, 'secours' si la caméra est inaccessible. */
+async function camera(mode, face) {
+  const video = mode === 'video';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || (video && !window.MediaRecorder)) return 'secours';
+  const demander = async f => {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: { facingMode: f, width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: video });
+    } catch (err) {
+      if (video && err && err.name !== 'NotAllowedError') return navigator.mediaDevices.getUserMedia({ video: { facingMode: f }, audio: false });
+      throw err;
+    }
+  };
+  let flux;
+  try { flux = await demander(face); }
+  catch (err) {
+    if (err && err.name === 'NotAllowedError') banniere('Caméra bloquée', 'Autorise la caméra pour ce site dans les réglages du navigateur. En attendant, le téléphone ouvre son appareil photo.');
+    return 'secours';
+  }
+
+  return new Promise(fini => {
+    const el = document.createElement('div');
+    el.className = 'cam';
+    el.innerHTML = `<video class="cam-vue" autoplay playsinline muted></video>
+      <div class="cam-haut">
+        <button type="button" class="cam-btn" data-c="fermer" aria-label="Fermer">✕</button>
+        <span class="cam-chrono" hidden>0:15</span>
+        <button type="button" class="cam-btn" data-c="tourner" aria-label="Changer de caméra">⟲</button>
+      </div>
+      <div class="cam-bas">
+        <div class="cam-aide">${video ? 'Touche pour filmer, 15 secondes au plus' : 'Touche pour prendre la photo'}</div>
+        <button type="button" class="cam-declencheur ${video ? 'video' : ''}" data-c="declencher" aria-label="${video ? 'Filmer' : 'Prendre la photo'}"><i></i></button>
+      </div>`;
+    document.body.appendChild(el);
+    const vue = $('.cam-vue', el);
+    const chrono = $('.cam-chrono', el);
+    let enreg = null, morceaux = [], minuteur = null, debut = 0, termine = false, dessin = 0;
+
+    const brancher = f => { flux = f; vue.srcObject = f; vue.classList.toggle('miroir', face === 'user'); };
+    brancher(flux);
+    const arreterFlux = () => { if (flux) flux.getTracks().forEach(t => t.stop()); };
+    const finir = r => {
+      if (termine) return;
+      termine = true;
+      clearInterval(minuteur); cancelAnimationFrame(dessin);
+      arreterFlux();
+      el.remove();
+      fini(r);
+    };
+
+    /* Dessine l'image comme on la voit (en miroir pour la caméra selfie). */
+    const peindre = (c, k) => {
+      const g = c.getContext('2d');
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      if (face === 'user') { g.translate(c.width, 0); g.scale(-1, 1); }
+      g.drawImage(vue, 0, 0, c.width, c.height);
+    };
+
+    const photo = () => {
+      const w = vue.videoWidth, h = vue.videoHeight;
+      if (!w) return;
+      const k = Math.min(1, 1600 / Math.max(w, h));
+      const c = document.createElement('canvas');
+      c.width = Math.round(w * k); c.height = Math.round(h * k);
+      peindre(c);
+      son('tic'); vibrer('40');
+      el.classList.add('flash');
+      c.toBlob(b => finir(b ? new File([b], 'photo.jpg', { type: 'image/jpeg' }) : null), 'image/jpeg', 0.9);
+    };
+
+    const typeVideo = ['video/mp4;codecs=avc1,mp4a', 'video/mp4', 'video/webm;codecs=vp8,opus', 'video/webm']
+      .find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+    const arreterVideo = () => { if (enreg && enreg.state !== 'inactive') enreg.stop(); };
+    const filmer = () => {
+      if (enreg) { arreterVideo(); return; }
+      let source = flux;
+      if (face === 'user' && vue.videoWidth && HTMLCanvasElement.prototype.captureStream) {
+        /* On filme une copie en miroir pour garder ce que l'on voit. */
+        const c = document.createElement('canvas');
+        c.width = vue.videoWidth; c.height = vue.videoHeight;
+        const boucle = () => { peindre(c); dessin = requestAnimationFrame(boucle); };
+        boucle();
+        source = c.captureStream(30);
+        flux.getAudioTracks().forEach(t => source.addTrack(t));
+      }
+      morceaux = [];
+      const opts = { videoBitsPerSecond: 2500000 };
+      if (typeVideo) opts.mimeType = typeVideo;
+      try { enreg = new MediaRecorder(source, opts); } catch (err) { enreg = new MediaRecorder(source); }
+      enreg.ondataavailable = e => { if (e.data && e.data.size) morceaux.push(e.data); };
+      enreg.onstop = () => {
+        const type = (enreg.mimeType || typeVideo || 'video/webm').split(';')[0];
+        const b = new Blob(morceaux, { type });
+        finir(b.size ? new File([b], 'video.' + (type.includes('mp4') ? 'mp4' : 'webm'), { type }) : null);
+      };
+      enreg.start(250);
+      debut = Date.now();
+      el.classList.add('filme');
+      $('[data-c=tourner]', el).style.visibility = 'hidden';
+      $('.cam-aide', el).textContent = 'Touche pour arrêter';
+      chrono.hidden = false;
+      son('tic'); vibrer('30');
+      const max = (MAX_DUREE_VIDEO - 1) * 1000;
+      minuteur = setInterval(() => {
+        const ecoule = Date.now() - debut;
+        chrono.textContent = '0:' + String(Math.max(0, Math.ceil((max - ecoule) / 1000))).padStart(2, '0');
+        if (ecoule >= max) arreterVideo();
+      }, 200);
+    };
+
+    el.addEventListener('click', async e => {
+      const b = e.target.closest('[data-c]');
+      if (!b) return;
+      if (b.dataset.c === 'fermer') { if (enreg) { enreg.onstop = null; arreterVideo(); } finir(null); }
+      else if (b.dataset.c === 'declencher') { if (video) filmer(); else photo(); }
+      else if (b.dataset.c === 'tourner') {
+        arreterFlux();
+        face = face === 'user' ? 'environment' : 'user';
+        try { brancher(await demander(face)); }
+        catch (err) { finir('secours'); }
+      }
+    });
+  });
 }
 
 function montrerApercu(el, id, m, quandPret) {
