@@ -11,7 +11,7 @@ const J = 86400000, H = 3600000;
 const PV_DEPART = 300, PV_RECHUTE = 10, DUREE = 365, MAX_DEFIS = 3;
 const MAX_VIDEO = 20 * 1024 * 1024, MAX_DUREE_VIDEO = 16;
 const CLE = 'bhcd-v2';
-const VERSION_APPLI = '9';
+const VERSION_APPLI = '10';
 
 const HABITUDES = {
   clope:     { nom: 'Fumer',           e: '🚬', bete: 'La Clope',     c: '#A8988A' },
@@ -1226,20 +1226,30 @@ async function camera(mode, face) {
       Object.assign({ width: { ideal: 1280 }, height: { ideal: 960 }, frameRate: { ideal: 30 } }, cible),
       cible
     ];
-    let derniere;
+    let derniere, fl = null;
     for (const v of essais) {
-      try {
-        const fl = await navigator.mediaDevices.getUserMedia({ video: v, audio: video });
-        dezoomer(fl);
-        return fl;
-      } catch (err) {
+      try { fl = await navigator.mediaDevices.getUserMedia({ video: v, audio: false }); break; }
+      catch (err) {
         derniere = err;
         if (err && err.name === 'NotAllowedError') throw err;
       }
     }
-    if (video) return navigator.mediaDevices.getUserMedia({ video: cible, audio: false });
-    throw derniere;
+    if (!fl) throw derniere;
+    dezoomer(fl);
+    /* Le micro est demandé une seule fois : sans lui, la vidéo se fait sans le son. */
+    if (video) {
+      if (!micro) {
+        try { micro = await navigator.mediaDevices.getUserMedia({ audio: true, video: false }); }
+        catch (err) {
+          micro = 'non';
+          banniere('Vidéo sans le son', 'Le micro est bloqué pour Chrome. Réglages du téléphone → Applications → Chrome → Autorisations → Micro.');
+        }
+      }
+      if (micro && micro !== 'non') micro.getAudioTracks().forEach(t => fl.addTrack(t));
+    }
+    return fl;
   };
+  let micro = null;
   let flux;
   try { flux = await demander(face); }
   catch (err) {
@@ -1278,7 +1288,7 @@ async function camera(mode, face) {
       vue.onloadedmetadata = () => { info.textContent = vue.videoWidth + '×' + vue.videoHeight; };
     };
     brancher(flux);
-    const arreterFlux = () => { if (flux) flux.getTracks().forEach(t => t.stop()); };
+    const arreterFlux = imageSeule => { if (flux) (imageSeule ? flux.getVideoTracks() : flux.getTracks()).forEach(t => t.stop()); };
     const finir = r => {
       if (termine) return;
       termine = true;
@@ -1359,7 +1369,7 @@ async function camera(mode, face) {
         const actuelle = (flux.getVideoTracks()[0] || {}).getSettings ? flux.getVideoTracks()[0].getSettings().deviceId : '';
         let cams = [];
         try { cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput' && d.deviceId); } catch (e) { /* rien */ }
-        arreterFlux();
+        arreterFlux(true);
         try {
           if (cams.length > 1) {
             const i = cams.findIndex(d => d.deviceId === actuelle);
