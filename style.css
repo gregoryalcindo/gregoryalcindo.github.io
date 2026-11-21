@@ -429,3 +429,4 @@ button.depot { background: transparent; font: inherit; font-weight: 900; cursor:
 .cam.filme .cam-declencheur i { border-radius: 8px; transform: scale(.55); }
 .cam.flash::after { content: ''; position: absolute; inset: 0; background: #fff; animation: camflash .35s ease-out forwards; }
 @keyframes camflash { from { opacity: .9; } to { opacity: 0; } }
+.cam-ouverte #app, .cam-ouverte #calques, .cam-ouverte #bannieres, .cam-ouverte #confettis { visibility: hidden; }

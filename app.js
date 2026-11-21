@@ -11,7 +11,7 @@ const J = 86400000, H = 3600000;
 const PV_DEPART = 300, PV_RECHUTE = 10, DUREE = 365, MAX_DEFIS = 3;
 const MAX_VIDEO = 20 * 1024 * 1024, MAX_DUREE_VIDEO = 16;
 const CLE = 'bhcd-v2';
-const VERSION_APPLI = '7';
+const VERSION_APPLI = '8';
 
 const HABITUDES = {
   clope:     { nom: 'Fumer',           e: '🚬', bete: 'La Clope',     c: '#A8988A' },
@@ -1219,7 +1219,7 @@ async function camera(mode, face) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || (video && !window.MediaRecorder)) return 'secours';
   const demander = async f => {
     try {
-      const fl = await navigator.mediaDevices.getUserMedia({ video: { facingMode: f, width: { ideal: 1920 } }, audio: video });
+      const fl = await navigator.mediaDevices.getUserMedia({ video: { facingMode: f, width: { ideal: 1280 }, height: { ideal: 960 }, aspectRatio: { ideal: 4 / 3 }, frameRate: { ideal: 30 } }, audio: video });
       dezoomer(fl);
       return fl;
     } catch (err) {
@@ -1248,6 +1248,7 @@ async function camera(mode, face) {
         <button type="button" class="cam-declencheur ${video ? 'video' : ''}" data-c="declencher" aria-label="${video ? 'Filmer' : 'Prendre la photo'}"><i></i></button>
       </div>`;
     document.body.appendChild(el);
+    document.body.classList.add('cam-ouverte');
     const vue = $('.cam-vue', el);
     const chrono = $('.cam-chrono', el);
     let enreg = null, morceaux = [], minuteur = null, debut = 0, termine = false, dessin = 0;
@@ -1261,6 +1262,7 @@ async function camera(mode, face) {
       clearInterval(minuteur); cancelAnimationFrame(dessin);
       arreterFlux();
       el.remove();
+      document.body.classList.remove('cam-ouverte');
       fini(r);
     };
 
