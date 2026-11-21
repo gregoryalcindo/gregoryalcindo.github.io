@@ -11,6 +11,7 @@ const J = 86400000, H = 3600000;
 const PV_DEPART = 300, PV_RECHUTE = 10, DUREE = 365, MAX_DEFIS = 3;
 const MAX_VIDEO = 20 * 1024 * 1024, MAX_DUREE_VIDEO = 16;
 const CLE = 'bhcd-v2';
+const VERSION_APPLI = '6';
 
 const HABITUDES = {
   clope:     { nom: 'Fumer',           e: '🚬', bete: 'La Clope',     c: '#A8988A' },
@@ -1859,7 +1860,24 @@ setInterval(() => {
   rafraichir();
 }, 2000);
 setInterval(() => { if (document.visibilityState === 'visible' && L.joueur) rafraichirAutres(); }, 45000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { dernierRafraichissement = Date.now(); rafraichir(); } });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { dernierRafraichissement = Date.now(); rafraichir(); verifierVersion(); } });
+
+/** Recharge l'appli dès qu'une nouvelle version est en ligne (sans attendre le cache du navigateur). */
+async function verifierVersion() {
+  if (location.protocol !== 'https:' || actionsEnCours > 0 || pile.length) return;
+  try {
+    const r = await fetch('./index.html?t=' + Date.now(), { cache: 'no-store' });
+    const v = ((await r.text()).match(/app\.js\?v=(\d+)/) || [])[1];
+    if (!v || v === VERSION_APPLI) return;
+    let deja = null;
+    try { deja = sessionStorage.getItem('bhcd-maj'); } catch (e) { /* rien */ }
+    if (deja === v) return;
+    try { sessionStorage.setItem('bhcd-maj', v); } catch (e) { /* rien */ }
+    location.replace('./?maj=' + v + location.hash);
+  } catch (err) { /* hors ligne */ }
+}
+setTimeout(verifierVersion, 3000);
+setInterval(verifierVersion, 5 * 60 * 1000);
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
