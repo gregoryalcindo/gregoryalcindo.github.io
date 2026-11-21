@@ -11,7 +11,7 @@ const J = 86400000, H = 3600000;
 const PV_DEPART = 300, PV_RECHUTE = 10, DUREE = 365, MAX_DEFIS = 3;
 const MAX_VIDEO = 20 * 1024 * 1024, MAX_DUREE_VIDEO = 16;
 const CLE = 'bhcd-v2';
-const VERSION_APPLI = '6';
+const VERSION_APPLI = '7';
 
 const HABITUDES = {
   clope:     { nom: 'Fumer',           e: '🚬', bete: 'La Clope',     c: '#A8988A' },
@@ -1203,6 +1203,15 @@ function brancherDepot(el, id, quandPret) {
 
 /* ================= Appareil photo intégré ================= */
 
+/** Met la caméra au plus large qu'elle permet. */
+function dezoomer(fl) {
+  const t = fl.getVideoTracks()[0];
+  try {
+    const cap = t.getCapabilities ? t.getCapabilities() : {};
+    if (cap.zoom && cap.zoom.min != null) t.applyConstraints({ advanced: [{ zoom: cap.zoom.min }] }).catch(() => {});
+  } catch (e) { /* rien */ }
+}
+
 /** Ouvre la caméra dans l'appli. Le résultat est exactement ce qu'on voit à l'écran.
     Rend un fichier, null si annulé, 'secours' si la caméra est inaccessible. */
 async function camera(mode, face) {
@@ -1210,7 +1219,9 @@ async function camera(mode, face) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || (video && !window.MediaRecorder)) return 'secours';
   const demander = async f => {
     try {
-      return await navigator.mediaDevices.getUserMedia({ video: { facingMode: f, width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: video });
+      const fl = await navigator.mediaDevices.getUserMedia({ video: { facingMode: f, width: { ideal: 1920 } }, audio: video });
+      dezoomer(fl);
+      return fl;
     } catch (err) {
       if (video && err && err.name !== 'NotAllowedError') return navigator.mediaDevices.getUserMedia({ video: { facingMode: f }, audio: false });
       throw err;
