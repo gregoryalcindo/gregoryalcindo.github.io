@@ -11,7 +11,7 @@ const J = 86400000, H = 3600000;
 const PV_DEPART = 300, PV_RECHUTE = 10, DUREE = 365, MAX_DEFIS = 3;
 const MAX_VIDEO = 20 * 1024 * 1024, MAX_DUREE_VIDEO = 16;
 const CLE = 'bhcd-v2';
-const VERSION_APPLI = '10';
+const VERSION_APPLI = '11';
 
 const HABITUDES = {
   clope:     { nom: 'Fumer',           e: '🚬', bete: 'La Clope',     c: '#A8988A' },
@@ -1285,7 +1285,6 @@ async function camera(mode, face) {
       if (st.facingMode) face = st.facingMode === 'user' ? 'user' : 'environment';
       else if (t && /front|avant|user/i.test(t.label)) face = 'user';
       vue.classList.toggle('miroir', face === 'user');
-      vue.onloadedmetadata = () => { info.textContent = vue.videoWidth + '×' + vue.videoHeight; };
     };
     brancher(flux);
     const arreterFlux = imageSeule => { if (flux) (imageSeule ? flux.getVideoTracks() : flux.getTracks()).forEach(t => t.stop()); };
