@@ -11,7 +11,7 @@ const J = 86400000, H = 3600000;
 const PV_DEPART = 300, PV_RECHUTE = 10, DUREE = 365, MAX_DEFIS = 3;
 const MAX_VIDEO = 20 * 1024 * 1024, MAX_DUREE_VIDEO = 16;
 const CLE = 'bhcd-v2';
-const VERSION_APPLI = '12';
+const VERSION_APPLI = '13';
 
 const HABITUDES = {
   clope:     { nom: 'Fumer',           e: '🚬', bete: 'La Clope',     c: '#A8988A' },
@@ -41,7 +41,7 @@ const SUGGESTIONS = [
   'Laver la voiture de quelqu\'un de la partie'
 ];
 
-const COULEURS = ['#FF5A4E', '#FFC93C', '#3DDC97', '#7AB8FF', '#C99BFF', '#FF7EC8'];
+const COULEURS = ['#FF5A4E', '#FFC93C', '#3DDC97', '#7AB8FF', '#C99BFF', '#FF7EC8', '#FF9F43', '#2EC4B6', '#B8E986', '#5B8CFF', '#E056FD', '#F8E16C', '#00D2D3', '#FFB38A', '#A3A1FF', '#FF6B9D'];
 const REACTIONS = [['respect', '👏'], ['honte', '🤡'], ['force', '💪'], ['mdr', '😂']];
 
 const BADGES = [
@@ -321,6 +321,7 @@ function beteSVG(d) {
       <path d="M20 88 v6 M82 88 v6" stroke="#3DDC97" stroke-width="2"/>
     </svg>`;
   }
+  const coul = ((membreOuAncien(d.qui) || {}).couleur) || h.c;
   const r = pv(d) / PV_DEPART;
   const s = (0.62 + 0.38 * Math.min(1.3, r)).toFixed(3);
   const faible = r < 0.4;
@@ -342,7 +343,7 @@ function beteSVG(d) {
     <ellipse cx="50" cy="94" rx="${(30 * s + 6).toFixed(1)}" ry="5" fill="#140D24"/>
     <g class="respire"><g transform="translate(50 92) scale(${s}) translate(-50 -92)">
       <path d="M31 28 L22 6 L42 21 Z M69 28 L78 6 L58 21 Z" fill="#5A1E3A" stroke="#1B1230" stroke-width="2.5" stroke-linejoin="round"/>
-      <path d="M50 16 C77 16 92 36 90 62 C88 86 72 93 50 93 C28 93 12 86 10 62 C8 36 23 16 50 16 Z" fill="${h.c}" stroke="#1B1230" stroke-width="3"/>
+      <path d="M50 16 C77 16 92 36 90 62 C88 86 72 93 50 93 C28 93 12 86 10 62 C8 36 23 16 50 16 Z" fill="${esc(coul)}" stroke="#1B1230" stroke-width="3"/>
       <ellipse cx="50" cy="80" rx="20" ry="9" fill="#fff" opacity=".18"/>
       ${yeux}${bouche}${pansement}
       <text x="50" y="89" text-anchor="middle" font-size="11">${h.e}</text>
@@ -827,10 +828,12 @@ function vueMoi() {
       <div style="min-width:0"><div class="partie-nom" style="font-size:22px">${esc(m.nom)}</div>
       <div class="discret">${points(L.joueur)} points · ${Object.keys(m.badges).length} badges</div></div>
     </div>
+    ${choixCouleur()}
     <div class="titre-section">Tes bêtes</div>
     <div class="pile">${mes.map(d => `${carteBete(d, true)}
       <details class="carte"><summary><b>Tes châtiments possibles</b> (${d.gages.length})</summary>
-      <div class="liste-gages" style="margin-top:10px">${d.gages.map(g => `<div class="gage-ligne">${esc(g)}</div>`).join('')}</div></details>`).join('')}
+      <div class="liste-gages" style="margin-top:10px">${d.gages.map(g => `<div class="gage-ligne">${esc(g)}</div>`).join('')}</div></details>
+      ${enJeu(d) ? `<button class="btn fantome" data-a="modifierDefi" data-d="${d.id}">✏️ Modifier ${P.debut ? 'mes châtiments' : 'ce défi'}</button>` : ''}`).join('')}
       <button class="btn fantome large" data-a="ajouterDefi" ${actifs >= MAX_DEFIS ? 'disabled' : ''}>
         ${actifs >= MAX_DEFIS ? `${MAX_DEFIS} défis en cours, c'est le maximum` : `Ajouter un défi (${actifs}/${MAX_DEFIS})`}</button>
     </div>
@@ -846,6 +849,20 @@ function vueMoi() {
     </div>
     ${zoneDanger()}
     <p class="discret" style="text-align:center;margin:18px 0 6px">Photos et vidéos chiffrées sur ton téléphone, effacées sous 24 h.</p>`;
+}
+
+/** Palette de la partie : les couleurs déjà prises affichent l'initiale de leur joueur. */
+function choixCouleur() {
+  if (!P || !P.membres[L.joueur]) return '';
+  const moi = P.membres[L.joueur].couleur;
+  const prise = c => Object.keys(P.membres).find(k => k !== L.joueur && P.membres[k].couleur === c);
+  return `<div class="titre-section">Ta couleur dans cette partie</div>
+    <div class="carte"><div class="couleurs">${COULEURS.map(c => {
+      const q = prise(c);
+      return `<button class="couleur ${c === moi ? 'choisie' : ''} ${q ? 'prise' : ''}" style="background:${c}" data-a="couleurPartie" data-c="${c}"
+        ${q ? `disabled aria-label="Prise par ${esc(nom(q))}"` : 'aria-label="Choisir cette couleur"'}>${q ? esc(nom(q).charAt(0).toUpperCase()) : ''}</button>`;
+    }).join('')}</div>
+    <div class="discret" style="margin-top:8px">Ta bête et ton avatar prennent cette couleur. Une couleur par joueur.</div></div>`;
 }
 
 function zoneDanger() {
@@ -1001,6 +1018,11 @@ function vueSalon() {
       <button class="btn soleil large" data-a="inviter">Envoyer le lien d'invitation</button>
       <p class="discret" style="margin:0">Le lien contient la clé qui chiffre vos photos. Envoie-le seulement aux joueurs.</p>
       ${carteNotifs()}
+      ${choixCouleur()}
+      ${P.membres[L.joueur] ? `<div class="titre-section" style="margin:6px 0 0">Tes défis</div>
+      <div class="pile">${mesDefis().map(d => `<div class="carte interrupteur"><span>${(HABITUDES[d.habit] || HABITUDES.autre).e} <b>${esc(d.nom)}</b> · ${d.gages.length} châtiments</span>
+        <button class="btn petit soleil" data-a="modifierDefi" data-d="${d.id}">Modifier</button></div>`).join('')}
+        ${mesDefis().length < MAX_DEFIS ? `<button class="btn fantome" data-a="ajouterDefi">+ Ajouter un défi</button>` : ''}</div>` : ''}
       <div class="titre-section" style="margin:6px 0 0">Dans la partie (${n})</div>
       <div class="pile">${membres}</div>
       ${createur
@@ -1610,23 +1632,35 @@ function feuillePari(defiId) {
   }));
 }
 
-function feuilleAjouterDefi() {
-  const exclues = mesDefis().filter(enJeu).map(d => d.habit).filter(h => h !== 'autre');
-  const a = { habit: null, nomAutre: '', gages: [] };
+function feuilleAjouterDefi(existant) {
+  const exclues = mesDefis().filter(d => enJeu(d) && d !== existant).map(d => d.habit).filter(h => h !== 'autre');
+  const a = existant
+    ? { habit: existant.habit, nomAutre: existant.habit === 'autre' ? existant.nom : '', gages: existant.gages.slice() }
+    : { habit: null, nomAutre: '', gages: [] };
   const el = ouvrir('<div id="ajout" class="pile" style="gap:14px"></div>');
   const zone = $('#ajout', el);
   const etape1 = () => {
-    zone.innerHTML = `<h2>Nouveau défi</h2>${grilleHabitudes(a.habit, exclues)}
+    zone.innerHTML = `<h2>${existant ? 'Modifier ton défi' : 'Nouveau défi'}</h2>${grilleHabitudes(a.habit, exclues)}
       ${a.habit === 'autre' ? `<div class="champ"><label for="ajoutAutre">Nomme ta bête</label><input id="ajoutAutre" maxlength="24" value="${esc(a.nomAutre)}"></div>` : ''}
-      <button class="btn corail large" id="a1" ${a.habit && (a.habit !== 'autre' || a.nomAutre.trim()) ? '' : 'disabled'}>Suivant</button>`;
+      <button class="btn corail large" id="a1" ${a.habit && (a.habit !== 'autre' || a.nomAutre.trim()) ? '' : 'disabled'}>Suivant</button>
+      ${existant ? `<button class="btn danger" id="aRetirer">Retirer ce défi</button>` : ''}`;
+    const ret = $('#aRetirer', zone);
+    if (ret) ret.addEventListener('click', async e => {
+      e.stopPropagation();
+      if (!confirm('Retirer ce défi ? Tu pourras en ajouter un autre avant le GO.')) return;
+      fermerEl(el);
+      await jouer('retirerDefi', { defi: existant.id }, 'Retrait du défi…');
+    });
     zone.querySelectorAll('.habitude').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); a.habit = b.dataset.k; son('tic'); etape1(); }));
     const ia = $('#ajoutAutre', zone);
     if (ia) ia.addEventListener('input', () => { a.nomAutre = ia.value; $('#a1', zone).disabled = !ia.value.trim(); });
     $('#a1', zone).addEventListener('click', etape2);
   };
   const etape2 = () => {
-    zone.innerHTML = `<h2>Tes châtiments</h2>${editeurGages(a.gages)}
-      <button class="btn corail large" id="a2" style="font-family:var(--f-titre);font-size:22px" ${a.gages.length >= 3 ? '' : 'disabled'}>GO (${a.gages.length}/3)</button>`;
+    zone.innerHTML = `<h2>Tes châtiments</h2>
+      ${existant && P.debut ? `<p class="discret" style="margin:0">La partie a commencé : ta bête ne change plus, mais tu peux revoir tes châtiments.</p>` : ''}
+      ${editeurGages(a.gages)}
+      <button class="btn corail large" id="a2" style="font-family:var(--f-titre);font-size:22px" ${a.gages.length >= 3 ? '' : 'disabled'}>${existant ? 'Enregistrer' : 'GO'} (${a.gages.length}/3)</button>`;
     zone.querySelectorAll('[data-a="suggestion"]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); a.gages.push(b.dataset.t); etape2(); }));
     zone.querySelectorAll('[data-a="retirerGage"]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); a.gages.splice(Number(b.dataset.i), 1); etape2(); }));
     const ajouter = e => { if (e) e.stopPropagation(); const v = $('#nouveauGage', zone).value.trim(); if (v) { a.gages.push(v); etape2(); } };
@@ -1635,10 +1669,14 @@ function feuilleAjouterDefi() {
     $('#a2', zone).addEventListener('click', async () => {
       fermerEl(el);
       const def = { habit: a.habit, nom: a.habit === 'autre' ? a.nomAutre.trim() : '', gages: a.gages };
-      if (await jouer('ajouterDefi', { defi: def }, 'Création du défi…')) { L.onglet = 'fil'; render(true); }
+      if (existant) {
+        if (await jouer('modifierDefi', { defi: existant.id, modif: def }, 'Enregistrement…')) { son('pop'); banniere('C\'est noté', 'Ton défi est à jour.'); }
+        return;
+      }
+      if (await jouer('ajouterDefi', { defi: def }, 'Création du défi…')) { L.onglet = P.debut ? 'fil' : L.onglet; render(true); }
     });
   };
-  etape1();
+  if (existant && P.debut) etape2(); else etape1();
 }
 
 /* ================= Parties : créer, rejoindre, inviter ================= */
@@ -1728,6 +1766,8 @@ async function rejoindrePartie(spectateur) {
     P = null;
     majEtat(d.etat);
     son('go'); confettis(100);
+    const moi = d.etat.membres[L.joueur];
+    if (moi && moi.couleur !== L.couleur) setTimeout(() => banniere('Ta couleur était prise', 'On t’en a donné une autre. Change-la dans l’onglet Moi si tu veux.'), 1500);
   } catch (err) { banniere('Impossible de rejoindre', err.message); }
   finally { fin(); }
 }
@@ -1897,6 +1937,12 @@ const ACTIONS = {
   denoncer(ds) { feuilleDenoncer(ds.id); },
   parier(ds) { feuillePari(ds.id); },
   ajouterDefi() { feuilleAjouterDefi(); },
+  modifierDefi(ds) { const d = defi(ds.d); if (d) feuilleAjouterDefi(d); },
+  async couleurPartie(ds) {
+    if (!P || !P.membres[L.joueur] || P.membres[L.joueur].couleur === ds.c) return;
+    son('tic');
+    if (await jouer('changerCouleur', { couleur: ds.c }, 'Nouvelle couleur…')) { L.couleur = ds.c; sauverLocal(); }
+  },
   voirMedia(ds, el) { el.innerHTML = 'Déchiffrement…'; chargerMedia(ds.id); },
   son() { L.son = !L.son; sauverLocal(); render(); son('pop'); },
   voirBadge(ds) {

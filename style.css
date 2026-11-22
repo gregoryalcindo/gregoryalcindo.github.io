@@ -438,3 +438,8 @@ button.depot { background: transparent; font: inherit; font-weight: 900; cursor:
 .sous-titre-install { font-weight: 900; font-size: 13px; color: var(--soleil); margin-top: 2px; }
 .carte-install details summary { cursor: pointer; font-weight: 800; font-size: 13px; opacity: .8; margin-bottom: 6px; }
 .ico-partage { display: inline-block; border: 1.5px solid currentColor; border-radius: 4px; padding: 0 4px; font-size: 12px; }
+
+/* Palette de couleurs : plus de couleurs, celles déjà prises sont barrées */
+.couleurs { display: flex; flex-wrap: wrap; gap: 10px; }
+.couleur { color: #1B1230; font-weight: 900; font-size: 15px; }
+.couleur.prise { opacity: .35; cursor: not-allowed; }
